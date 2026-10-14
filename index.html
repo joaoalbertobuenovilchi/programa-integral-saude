@@ -578,10 +578,14 @@ const DOC_CONTADORES = 'contadores';
                              + funcionários, mantenedores, tipos de logradouro e municípios do IBGE;
                              importar/exportar dados; usuários, perfis, recados, log, unificar
                              profissionais, segurança; conexão/senha e ajuda. Ambulatório renumerado 1 a 9
+     1.05.2026  14/10/2026   MÓDULO FARMÁCIA (equivalente ao SIS_FARMA): estoque por local, lote e validade;
+                             entradas (XML da NF-e), dispensação (receita do consultório, controlados),
+                             saídas, transferências, pedidos, inventário, alto custo, blocos de receita,
+                             próximas retiradas e relatórios (balancete, ficha, livro de controlados)
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 4;
+const APP_ALTERACAO = 5;
 const APP_DATA = '2026-10-14';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -817,12 +821,20 @@ const TABELAS = {
   funcionarios:{}, mantenedores:{}, tiposLogradouro:{},
   municipios:{modo:'hash',partes:8},           /* lista do IBGE: até 5.570 municípios */
   recados:{modo:'mes',campo:'em',partes:1},
+  /* ---- MÓDULO FARMÁCIA ---- */
+  farmaLocais:{}, farmaGrupos:{}, farmaSubgrupos:{}, farmaClassificacoes:{}, farmaListas:{}, farmaUnidadesMedida:{}, farmaLaboratorios:{}, farmaProgramas:{}, farmaTiposLanc:{}, farmaRecursos:{},
+  farmaProdutos:{modo:'hash',partes:4}, farmaFornecedores:{modo:'hash',partes:2}, farmaBlocos:{modo:'hash',partes:2}, farmaPedidos:{modo:'hash',partes:4},
+  farmaDocs:{modo:'mes',campo:'data',partes:16},            /* todo movimento de estoque (a dispensação entra sem o paciente) */
+  farmaFechamentos:{modo:'mes',campo:'mes',partes:4},       /* saldo de cada local no fim de cada mês */
+  farmaInventarios:{modo:'mes',campo:'data',partes:2},
+  farmaDisp:{modo:'mes',campo:'data',partes:16,clinico:true}, /* quem recebeu o quê */
+  farmaAltoCusto:{modo:'hash',partes:4,clinico:true},
 };
 /* Capacidade: cada parte guarda até ~900 KB. Com as partes acima o sistema comporta, por exemplo,
    ~40 mil pacientes, ~100 mil doses de vacina e ~3 mil atendimentos por mês. Para um município
    maior, aumente as partes ANTES de começar a usar (depois disso o número não pode mudar).
    Meses carregados ao entrar (os demais são buscados quando um relatório ou prontuário precisa): */
-const JANELA_MESES = { agendamentos:[0,2], agendExames:[0,2], agendTransportes:[0,2], atendimentos:[-1,0], clinico:[0,0], producao:[0,0], sadt:[0,0], viagens:[0,1], labRequisicoes:[-1,0], labLotes:[-2,0], labProducao:[0,0], recados:[-2,0] };
+const JANELA_MESES = { agendamentos:[0,2], agendExames:[0,2], agendTransportes:[0,2], atendimentos:[-1,0], clinico:[0,0], producao:[0,0], sadt:[0,0], viagens:[0,1], labRequisicoes:[-1,0], labLotes:[-2,0], labProducao:[0,0], recados:[-2,0], farmaDocs:[-1,0], farmaFechamentos:[-2,0], farmaInventarios:[-2,0], farmaDisp:[-2,0] };
 
 const DELETE = {__excluir:true};
 function caminhoSet(obj, caminho, v){ const i=caminho.indexOf('.'); if(i<0){ obj[caminho]=v; return; } const a=caminho.slice(0,i), b=caminho.slice(i+1); if(!obj[a]||typeof obj[a]!=='object') obj[a]={}; obj[a][b]=v; }
@@ -984,10 +996,12 @@ async function garantirHistoricoPaciente(pac){
   /* exames do laboratório: só os meses em que o paciente teve requisição (pac.mesesLab) */
   const mesesLab = Array.isArray(pac.mesesLab) ? pac.mesesLab : [];
   const precisaLab = tabelaPermitida('labRequisicoes') && mesesLab.some(m=>!MESES_OK.labRequisicoes.has(m));
-  const precisa=precisaLab || tabs.some(t=>tabelaPermitida(t) && meses.some(m=>!MESES_OK[t].has(m)));
+  const mesesFarma = Array.isArray(pac.mesesFarma) ? pac.mesesFarma : [];
+  const precisaFarma = tabelaPermitida('farmaDisp') && mesesFarma.some(m=>!MESES_OK.farmaDisp.has(m));
+  const precisa=precisaLab || precisaFarma || tabs.some(t=>tabelaPermitida(t) && meses.some(m=>!MESES_OK[t].has(m)));
   if(!precisa) return;
   carregandoMsg(true, 'Buscando o histórico do paciente…');
-  try{ await Promise.all(tabs.map(t=>garantirMeses(t, meses)).concat([garantirMeses('labRequisicoes', mesesLab)])); }
+  try{ await Promise.all(tabs.map(t=>garantirMeses(t, meses)).concat([garantirMeses('labRequisicoes', mesesLab), garantirMeses('farmaDisp', mesesFarma)])); }
   catch(e){ showToast('Parte do histórico não pôde ser carregada: '+msgErro(e),'warning'); }
   finally{ carregandoMsg(false); }
 }
@@ -1119,6 +1133,7 @@ function aoMudarDados(tabs){
   if(tabs.has('pacientes')) CACHE_PAC=null;
   if(tabs.has('config')) aplicarConfig();
   if(tabs.has('chamadas')) painelTVAtualizar();
+  if(typeof farmaAoMudar==='function') farmaAoMudar(tabs);
   if(typeof APP_PRONTO!=='undefined' && APP_PRONTO){ atualizarTelaSegura(tabs); }
 }
 let TELA_PENDENTE=false;
@@ -1604,7 +1619,7 @@ async function iniciarSessao(u){
   registrarAcao('Entrou no sistema');
   await carregarTudo();
   await garantirDadosPadrao();
-  if(MODO_DEMO){ try{ await seedDemo(); if(typeof seedDemoLab==='function') await seedDemoLab(); }catch(e){ console.error('demo', e); } }
+  if(MODO_DEMO){ try{ await seedDemo(); if(typeof seedDemoLab==='function') await seedDemoLab(); if(typeof seedDemoFarma==='function') await seedDemoFarma(); }catch(e){ console.error('demo', e); } }
   if(!MODO_DEMO && isAdmin() && cfgEnt().nome) CloudDriver.set('_publico', {instalado:true, em:agoraLocal(), entidade:entidadeFantasia()}).catch(()=>{});
   APP_PRONTO=true;
   mostrarTela(null);
@@ -1719,6 +1734,7 @@ function navBadge(id){
     if(id==='usuarios') return PEDIDOS_ACESSO.length;
     if(id==='recados' && typeof recadosNaoLidos==='function') return recadosNaoLidos();
     if(typeof labBadge==='function' && /^lab/.test(id)) return labBadge(id);
+    if(typeof farmaBadge==='function' && /^farma/.test(id)) return farmaBadge(id);
   }catch(e){}
   return 0;
 }
@@ -2779,6 +2795,7 @@ function itensProntuario(pid){
     lista('notificacoes').filter(n=>n.pacienteId===pid).forEach(n=>it.push({tipo:'outros', data:n.dataNotificacao, titulo:'Notificação: '+fmtCID(n.cid)+' '+((acharPorChave('cid','codigo',n.cid)||{}).nome||n.agravo||''), sub:n.situacao||'', txt:n.obs||''}));
     lista('anexos').filter(n=>n.pacienteId===pid).forEach(n=>it.push({tipo:'outros', data:n.data, titulo:'📎 Anexo: '+n.nome, sub:n.descricao||'', txt:'', anexo:n.id}));
     if(typeof labItensProntuario==='function') labItensProntuario(pid).forEach(x=>it.push(x));
+    if(typeof farmaItensProntuario==='function') farmaItensProntuario(pid).forEach(x=>it.push(x));
   }
   lista('agendTransportes').filter(a=>a.pacienteId===pid).forEach(a=>it.push({tipo:'transp', data:a.data, titulo:'Transporte para '+(nomeDe('locais',a.localId)||a.destino||''), badge:`<span class="badge azul">${esc(a.situacao||'')}</span>`, sub:a.motivo||'', txt:a.obs||''}));
   return it.sort((a,b)=>String(b.data).localeCompare(String(a.data)));
@@ -4335,7 +4352,7 @@ function rosca(id, labels, valores){ grafico(id, {type:'doughnut', data:{labels,
 /* ============================================================
    CENTRAL DE RELATÓRIOS
    ============================================================ */
-const RF={rel:'', ini:primeiroDiaMes(mesDe(hojeISO())), fim:hojeISO(), unidade:'', profissional:'', especialidade:'', tipo:'', agrupar:'', sit:'', vacina:'', pacienteId:'', min:1, faltas:false, labExame:'', naoColetados:false, alterados:false};
+const RF={rel:'', ini:primeiroDiaMes(mesDe(hojeISO())), fim:hojeISO(), unidade:'', profissional:'', especialidade:'', tipo:'', agrupar:'', sit:'', vacina:'', pacienteId:'', min:1, faltas:false, labExame:'', naoColetados:false, alterados:false, farmaLocal:'', farmaProduto:'', farmaGrupo:'', farmaLista:'', dias:60};
 let RES=null;
 function fAtend(F, incluirFaltas){
   return lista('atendimentos').filter(a=>a.data>=F.ini && a.data<=F.fim && (!F.unidade||a.unidadeId===F.unidade) && (!F.profissional||a.profissionalId===F.profissional) && (!F.especialidade||a.especialidadeId===F.especialidade) && (!F.tipo||a.tipoAtendimentoId===F.tipo) && (incluirFaltas || !['faltou','cancelado','evadiu'].includes(a.status)) && a.status!=='cancelado');
@@ -4417,6 +4434,11 @@ function relatoriosHTML(mod){
   if(f.includes('tipo')) campos.push(`<div class="field"><label>Tipo de atendimento</label>${sel('tipo', opcoesRef('tiposAtendimento','').map(u=>[u.id,u.nome]), RF.tipo, 'Todos')}</div>`);
   if(f.includes('unidadeSol')) campos.push(`<div class="field w2"><label>Unidade solicitante</label>${sel('unidade', opcoesRef('unidades','').map(u=>[u.id,u.nome]), RF.unidade, 'Todas')}</div>`);
   if(f.includes('labExame')) campos.push(`<div class="field w2"><label>Exame</label>${sel('labExame', ordenarTexto(lista('labExames'), e=>e.sigla).map(e=>[e.id, e.sigla+' — '+e.nome]), RF.labExame, 'Todos')}</div>`);
+  if(f.includes('farmaLocal')) campos.push(`<div class="field w2"><label>Local de estoque</label>${sel('farmaLocal', ordenarTexto(ativos('farmaLocais'),l=>l.nome).map(l=>[l.id,l.nome]), RF.farmaLocal, 'Todos os locais')}</div>`);
+  if(f.includes('farmaProduto')) campos.push(`<div class="field w2"><label>Produto</label>${sel('farmaProduto', ordenarTexto(ativos('farmaProdutos'),p=>p.nome).map(p=>[p.id,(p.codigo||p.codigoSIS?(p.codigo||p.codigoSIS)+' — ':'')+p.nome]), RF.farmaProduto, 'Todos')}</div>`);
+  if(f.includes('farmaGrupo')) campos.push(`<div class="field"><label>Grupo</label>${sel('farmaGrupo', ordenarTexto(ativos('farmaGrupos'),g=>g.nome).map(g=>[g.id,g.nome]), RF.farmaGrupo, 'Todos')}</div>`);
+  if(f.includes('farmaLista')) campos.push(`<div class="field"><label>Lista (controlados)</label>${sel('farmaLista', ordenarTexto(ativos('farmaListas'),g=>g.nome).map(g=>[g.id,g.nome+' — '+(g.descricao||'')]), RF.farmaLista, 'Todas')}</div>`);
+  if(f.includes('dias')) campos.push(`<div class="field"><label>Até quantos dias</label><input type="number" class="inp" value="${RF.dias}" min="1" onchange="RF.dias=this.value"></div>`);
   if(f.includes('vacina')) campos.push(`<div class="field"><label>Vacina</label>${sel('vacina', opcoesRef('imunobiologicos','').map(u=>[u.id,u.sigla+' — '+u.nome]), RF.vacina, 'Todas')}</div>`);
   if(f.includes('cid')) campos.push(`<div class="field"><label>CID (início)</label><input class="inp" value="${esc(RF.cid||'')}" placeholder="Ex.: I10, J" onchange="RF.cid=this.value"></div>`);
   if(f.includes('paciente')) campos.push(`<div class="field w2"><label>Paciente</label>${pickerHTML('rfPac','pacientes',RF.pacienteId,{aoEscolher:(i,p)=>{RF.pacienteId=p.id;}})}</div>`);
@@ -4439,7 +4461,7 @@ async function gerarRelatorio(){
   catch(e){ console.error(e); RES={erro:'Falha ao gerar: '+e.message}; }
   registrarAcao('Gerou o relatório: '+r.t); render(true);
 }
-function relFiltrosTexto(){ const r=relDef(); const t=[]; if(r.f.includes('periodo')) t.push('Período: '+fmtData(RF.ini)+' a '+fmtData(RF.fim)); if(r.f.includes('unidade')) t.push('Unidade: '+(nomeDe('unidades',RF.unidade)||'todas')); if(r.f.includes('unidadeSol')) t.push('Unidade solicitante: '+(nomeDe('unidades',RF.unidade)||'todas')); if(RF.labExame&&r.f.includes('labExame')) t.push('Exame: '+nomeDe('labExames',RF.labExame)); if(RF.alterados&&r.f.includes('alterados')) t.push('Só alterados'); if(RF.profissional&&r.f.includes('profissional')) t.push('Profissional: '+nomeDe('profissionais',RF.profissional)); if(RF.especialidade&&r.f.includes('especialidade')) t.push('Especialidade: '+nomeDe('especialidades',RF.especialidade)); return t.join(' · '); }
+function relFiltrosTexto(){ const r=relDef(); const t=[]; if(r.f.includes('periodo')) t.push('Período: '+fmtData(RF.ini)+' a '+fmtData(RF.fim)); if(r.f.includes('unidade')) t.push('Unidade: '+(nomeDe('unidades',RF.unidade)||'todas')); if(r.f.includes('unidadeSol')) t.push('Unidade solicitante: '+(nomeDe('unidades',RF.unidade)||'todas')); if(RF.labExame&&r.f.includes('labExame')) t.push('Exame: '+nomeDe('labExames',RF.labExame)); if(RF.alterados&&r.f.includes('alterados')) t.push('Só alterados'); if(RF.farmaLocal&&r.f.includes('farmaLocal')) t.push('Local: '+nomeDe('farmaLocais',RF.farmaLocal)); if(RF.farmaProduto&&r.f.includes('farmaProduto')) t.push('Produto: '+nomeDe('farmaProdutos',RF.farmaProduto)); if(RF.profissional&&r.f.includes('profissional')) t.push('Profissional: '+nomeDe('profissionais',RF.profissional)); if(RF.especialidade&&r.f.includes('especialidade')) t.push('Especialidade: '+nomeDe('especialidades',RF.especialidade)); return t.join(' · '); }
 function resultadoRelHTML(){
   if(RES.erro) return `<div class="alerta-aviso">${esc(RES.erro)}</div>`;
   const r=relDef(); const linhas=RES.linhas||[];
@@ -4699,7 +4721,6 @@ VIEWS.seguranca=()=>{
 
 /* ---------------- Módulos do sistema ---------------- */
 const MODULOS_PLANEJADOS=[
-  ['💊','Farmácia / Almoxarifado','Estoque por lote e validade, dispensação ligada às receitas do consultório, pedidos, requisições, inventário, medicamentos controlados (livro) e alto custo.'],
   ['🩻','Raio-X / Imagem','Agenda de exames de imagem, laudos e entrega de resultados.'],
   ['🏨','Hospital / Internação','Leitos, internação, evolução, prescrição, alta, AIH e censo diário.'],
   ['🦷','Odontologia','Odontograma, tratamento por dente, saúde bucal na escola e produção odontológica.'],
@@ -4718,9 +4739,10 @@ const GRUPOS_OPCIONAIS=['4. Programas de Saúde','5. Vacinas','6. Encaminhamento
 VIEWS.modulos=()=>{
   const ocultos=new Set(cfgGeral().modulosOcultos||[]);
   return `<div class="card"><h2>🧩 Programa Integral de Saúde — um sistema, vários módulos</h2><div class="subtitle">Todos os módulos usam os mesmos <b>cadastros gerais</b> (entidade, unidades, profissionais, pacientes), os mesmos <b>usuários e perfis</b> e o mesmo banco. Assim, um paciente cadastrado na recepção aparece na farmácia, no laboratório e no hospital sem digitar de novo.</div>
-    <div class="grid cols-3"><div class="stat"><div class="label">Módulos instalados</div><div class="value" style="font-size:17px;">🧭 Menu · 🩺 Ambulatório · 🧪 Laboratório</div><div class="hint">v. ${appVersao()} — equivalentes ao SIS_MENU, SIS_AMB e SIS_LABO</div></div><div class="stat azul"><div class="label">Telas disponíveis</div><div class="value">${Object.keys(MENU_ITENS).length}</div></div><div class="stat roxo"><div class="label">Tabelas de dados</div><div class="value">${Object.keys(TABELAS).length}</div></div></div></div>
+    <div class="grid cols-3"><div class="stat"><div class="label">Módulos instalados</div><div class="value" style="font-size:17px;">🧭 Menu · 🩺 Ambulatório · 🧪 Laboratório · 💊 Farmácia</div><div class="hint">v. ${appVersao()} — equivalentes ao SIS_MENU, SIS_AMB, SIS_LABO e SIS_FARMA</div></div><div class="stat azul"><div class="label">Telas disponíveis</div><div class="value">${Object.keys(MENU_ITENS).length}</div></div><div class="stat roxo"><div class="label">Tabelas de dados</div><div class="value">${Object.keys(TABELAS).length}</div></div></div></div>
   ${isAdmin()?`<div class="card"><h2>Partes do Ambulatório em uso</h2><div class="subtitle">Desligue os grupos que o município não usa — eles somem do menu de todos (os dados ficam guardados e voltam ao religar).</div><div class="checks">${GRUPOS_OPCIONAIS.map(g=>{ const ids=(MENU.find(x=>x.g===g)||{itens:[]}).itens.map(i=>i.id); const on=!ids.every(i=>ocultos.has(i)); return `<label class="check"><input type="checkbox" ${on?'checked':''} onchange="moduloGrupo('${escJs(g)}',this.checked)"> ${esc(g)}</label>`; }).join('')}<label class="check"><input type="checkbox" ${!ocultos.has('zoonoses')?'checked':''} onchange="moduloItem('zoonoses',this.checked)"> Controle de Zoonoses</label></div></div>`:''}
   ${isAdmin()&&typeof LAB_VIEWS!=='undefined'?`<div class="card"><h2>🧪 Módulo Laboratório</h2><div class="subtitle">Requisição, coleta com etiqueta de código de barras, mapa de trabalho, digitação e liberação de resultados, laudos, laboratório de apoio, integração com equipamentos e relatórios. Desligue se o município não tem laboratório próprio (os dados ficam guardados).</div><label class="check"><input type="checkbox" ${!LAB_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloLab(this.checked)"> Módulo Laboratório em uso</label></div>`:''}
+  ${isAdmin()&&typeof FARMA_VIEWS!=='undefined'?`<div class="card"><h2>💊 Módulo Farmácia</h2><div class="subtitle">Estoque por local, lote e validade, dispensação (inclusive controlados e pela receita do consultório), entradas com XML da nota, transferências, pedidos, inventário, alto custo e relatórios. Desligue se a farmácia não usa o sistema (os dados ficam guardados).</div><label class="check"><input type="checkbox" ${!FARMA_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloFarma(this.checked)"> Módulo Farmácia em uso</label></div>`:''}
   <div class="card"><h2>Próximos módulos planejados</h2><div class="grid cols-2">${MODULOS_PLANEJADOS.map(m=>`<div style="border:1px dashed var(--line);border-radius:10px;padding:12px;"><div style="font-weight:700;">${m[0]} ${esc(m[1])} <span class="badge cinza">planejado</span></div><div class="small muted" style="margin-top:4px;line-height:1.5;">${esc(m[2])}</div></div>`).join('')}</div></div>
   <div class="card"><h2>Outros aplicativos da Secretaria</h2><div class="subtitle">Usam o mesmo login (e-mail e senha) e o mesmo projeto do Firebase.</div><div class="actions">${APPS_SECRETARIA.map(a=>`<a class="btn secondary" href="${a[2]}" target="_blank" rel="noopener">${a[0]} ${esc(a[1])} ↗</a>`).join('')}</div></div>
   <details class="card"><summary style="cursor:pointer;font-weight:700;">🛠️ Para quem for desenvolver um módulo novo</summary><ol style="font-size:12.5px;line-height:1.7;">
@@ -6067,8 +6089,10 @@ function impTipoLocal(s){ const x=norm(s); if(!x) return ''; const op=CADS.locai
   const r=[[/HOSPITAL|SANTA CASA/,'HOSPITAL'],[/AME|ESPECIALI/,'AME / CENTRO DE ESPECIALIDADES'],[/CLINICA/,'CLÍNICA'],[/LABORAT/,'LABORATÓRIO'],[/IMAGEM|RAIO|TOMOGRA|RESSONAN|ULTRAS/,'SERVIÇO DE IMAGEM'],[/CAPS/,'CAPS'],[/CONSORCIO/,'CONSÓRCIO'],[/REFERENCIA/,'UNIDADE DE REFERÊNCIA']].find(p=>p[0].test(x)); return r?r[1]:'OUTRO'; }
 /* Referências (CBO → especialidade, CNES → unidade...): acha o que existe ou prepara um cadastro novo */
 function impRefPor(ctx, tab, chave, valor, novo){
+  /* nomes comparados sem acento, espaço e pontuação: "MATERIAL MEDICO HOSPITALAR" = "MATERIAL MÉDICO-HOSPITALAR" */
+  if(chave==='nome') valor=impCompacto(valor);
   const k=chave+':'+valor; ctx.idx[tab]=ctx.idx[tab]||{};
-  if(!ctx.idx[tab][chave]){ const m=new Map(); lista(tab).forEach(r=>{ const v=chave==='nome'?norm(r.nome):String(r[chave]||''); if(v && !m.has(v)) m.set(v, r); }); ctx.idx[tab][chave]=m; }
+  if(!ctx.idx[tab][chave]){ const m=new Map(); lista(tab).forEach(r=>{ const v=chave==='nome'?impCompacto(r.nome):String(r[chave]||''); if(v && !m.has(v)) m.set(v, r); }); ctx.idx[tab][chave]=m; }
   const ex=ctx.idx[tab][chave].get(valor); if(ex) return ex;
   ctx.aux[tab]=ctx.aux[tab]||new Map(); if(ctx.aux[tab].has(k)) return ctx.aux[tab].get(k);
   if(!novo) return null;
@@ -6845,6 +6869,7 @@ const VERSOES=[
   ['1.02.2026','14/10/2026','MÓDULO LABORATÓRIO (equivalente ao SIS_LABO): requisição, coleta e etiquetas, resultados, liberação, laudos, apoio, integração e relatórios; produção no BPA.'],
   ['1.03.2026','14/10/2026','Importar de Outros Sistemas: Fiorilli SIS (XML/TXT), e-SUS (XML/zip), CNES e planilhas, com histórico e "desfazer".'],
   ['1.04.2026','14/10/2026','MÓDULO MENU (equivalente ao SIS_MENU): cadastros comuns saem do Ambulatório; funcionários, mantenedores, tipos de logradouro, municípios do IBGE, exportar tabelas, recados, unificar profissionais, conexão e ajuda.'],
+  ['1.05.2026','14/10/2026','MÓDULO FARMÁCIA (equivalente ao SIS_FARMA): dispensação (inclusive pela receita do consultório e controlados), uso contínuo, alto custo, estoque por local e lote, entradas com XML da nota, saídas, transferências, pedidos, inventário e relatórios.'],
 ];
 VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
   <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div></div>
@@ -6858,6 +6883,887 @@ VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
     <li>Para treinar a equipe, use o <b>modo demonstração</b> na tela de acesso — não grava nada na nuvem.</li>
     <li>Dúvidas e liberação de acesso: fale com o administrador do sistema na Secretaria.</li></ul></div></div>
   <div class="card"><h2>📜 Novidades de cada versão</h2>${tabelaHTML(['Versão','Data','O que mudou'], VERSOES.slice().reverse())}</div>`;
+
+
+/* ============================================================
+   MÓDULO FARMÁCIA (equivalente ao SIS_FARMA da Fiorilli)
+   Estoque por LOCAL (almoxarifado, farmácia municipal, farmácia da
+   UBS... = "unidades de trabalho" do SIS), por lote e validade.
+   Todo movimento é um documento em farmaDocs (entrada, saída interna,
+   transferência, ajuste de inventário e a "sombra" da dispensação,
+   sem o paciente). Quem recebeu o quê fica em farmaDisp (clínico).
+   O saldo = fechamento do mês anterior (farmaFechamentos) + os
+   documentos do mês atual; o fechamento é calculado sozinho e
+   refeito quando alguém lança/cancela algo num mês já fechado.
+   ============================================================ */
+const FARMA_GRUPOS_MENU=[
+  {g:'Visão Geral da Farmácia', ic:'💊', itens:[
+    {id:'farmaPainel', r:'Painel da Farmácia', ic:'💊', d:'Resumo do estoque do local: itens abaixo do mínimo, lotes vencendo, dispensações do dia e do mês, retiradas atrasadas e processos de alto custo a vencer.'},
+  ]},
+  {g:'1. Dispensação', ic:'🧾', itens:[
+    {id:'farmaDispensacao', r:'Dispensação ao Paciente', ic:'🧾', d:'Requisição de saída ao paciente: por produto, código de barras ou pela receita do consultório; lote que vence primeiro, controlados e comprovante.'},
+    {id:'farmaUsoContinuo', r:'Próximas Retiradas', ic:'🔁', d:'Pacientes de uso contínuo com retirada atrasada ou próxima — busca ativa e aviso por WhatsApp.'},
+    {id:'farmaAltoCusto', r:'Alto Custo (Processos)', ic:'📂', d:'Processos do componente especializado (LME): vigência, renovação, situação e retiradas do paciente.'},
+    {id:'farmaBlocos', r:'Blocos de Receita', ic:'📒', d:'Retirada de talões de notificação/receita por profissional: o número da receita já indica quem prescreveu.'},
+  ]},
+  {g:'2. Estoque e Movimentação', ic:'📦', itens:[
+    {id:'farmaEstoque', r:'Posição do Estoque', ic:'📦', d:'Saldo por produto e lote, mínimo, validade, ficha de movimentação, estoque nos outros locais e etiquetas.'},
+    {id:'farmaEntradas', r:'Entradas', ic:'📥', d:'Requisições de entrada: compra, recebimento do Estado, doação, estoque inicial — com leitura do XML da nota fiscal.'},
+    {id:'farmaSaidas', r:'Saídas Internas e Perdas', ic:'📤', d:'Consumo interno, perdas por validade ou quebra, doações e devoluções.'},
+    {id:'farmaTransferencias', r:'Transferências', ic:'🔄', d:'Remessa de produtos entre locais de estoque (ex.: almoxarifado → farmácia da UBS), com guia para assinatura.'},
+    {id:'farmaPedidos', r:'Pedidos de Compra', ic:'🛒', d:'Pedidos aos fornecedores com sugestão pelo consumo; a entrada pelo pedido mostra o que falta receber.'},
+    {id:'farmaInventario', r:'Inventário', ic:'📋', d:'Contagem do estoque e acerto automático das diferenças.'},
+  ]},
+  {g:'3. Cadastros da Farmácia', ic:'🗂️', itens:[
+    {id:'farmaProdutos', r:'Produtos', ic:'💊', d:'Medicamentos, materiais e insumos: unidade, grupo, controlado (Portaria 344), mínimo, código de barras, CATMAT e ligação com a receita.'},
+    {id:'farmaFornecedores', r:'Fornecedores', ic:'🏭', d:'Fornecedores usados nas entradas e nos pedidos.'},
+    {id:'farmaTabelas', r:'Tabelas da Farmácia', ic:'📚', d:'Locais de estoque, grupos, subgrupos, classificações, listas de controlados, unidades, laboratórios, programas, tipos de lançamento e recursos.'},
+    {id:'farmaConfig', r:'Configurações da Farmácia', ic:'⚙️', d:'Regras de estoque negativo, validade, receitas e recálculo do estoque.'},
+  ]},
+  {g:'4. Relatórios da Farmácia', ic:'📈', itens:[
+    {id:'farmaRelatorios', r:'Relatórios da Farmácia', ic:'📈', d:'Posição, balancete, ficha de movimentação, mínimo, validade, livro de controlados, receitas, por profissional, consumo e mais.'},
+  ]},
+];
+FARMA_GRUPOS_MENU.forEach(g=>{ MENU.push(g); g.itens.forEach(it=>{ it.grupo=g.g; MENU_ITENS[it.id]=it; }); });
+MODULOS_MENU.push({id:'farma', nome:'MÓDULO FARMÁCIA', ic:'💊', grupos:FARMA_GRUPOS_MENU.map(g=>g.g), badges:['farmaUsoContinuo','farmaEstoque']});
+const FARMA_VIEWS=FARMA_GRUPOS_MENU.flatMap(g=>g.itens.map(i=>i.id));
+(function(){
+  const todos=n=>Object.fromEntries(FARMA_VIEWS.map(v=>[v,n]));
+  PERFIS_PADRAO.push({id:'farmaceutico', nome:'Farmácia — Farmacêutico(a)', clinico:true, perm:Object.assign(todos(2), {farmaRelatorios:1, pacientes:2, prontuario:1, modulos:1, unidades:1, profissionais:1, locais:1})});
+  PERFIS_PADRAO.push({id:'farmaAtendente', nome:'Farmácia — Atendente', clinico:true, perm:{farmaPainel:1, farmaDispensacao:2, farmaUsoContinuo:2, farmaAltoCusto:1, farmaBlocos:1, farmaEstoque:1, farmaProdutos:1, farmaRelatorios:1, pacientes:2, modulos:1}});
+  PERFIS_PADRAO.push({id:'almoxarifado', nome:'Almoxarifado / Estoque', clinico:false, perm:{farmaPainel:1, farmaEstoque:2, farmaEntradas:2, farmaSaidas:2, farmaTransferencias:2, farmaPedidos:2, farmaInventario:2, farmaProdutos:2, farmaFornecedores:2, farmaTabelas:1, farmaRelatorios:1, modulos:1, unidades:1}});
+  const add=(id,o)=>{ const p=PERFIS_PADRAO.find(x=>x.id===id); if(p && p.perm && typeof p.perm==='object') Object.assign(p.perm, o); };
+  add('medico', {farmaEstoque:1}); add('enfermagem', {farmaEstoque:1});
+})();
+const _rotuloFarma=rotuloDe;
+rotuloDe=function(tab, rec){
+  if(rec && tab==='farmaProdutos'){ const u=obter('farmaUnidadesMedida', rec.unidadeMedidaId); const c=rec.codigo||rec.codigoSIS; return (c?c+' — ':'')+(rec.nome||'')+(u?' ('+u.sigla+')':''); }
+  if(rec && tab==='farmaUnidadesMedida') return (rec.sigla||'')+' — '+(rec.nome||'');
+  if(rec && tab==='farmaListas') return (rec.nome||'')+(rec.descricao?' — '+rec.descricao:'');
+  if(rec && tab==='farmaBlocos') return nomeDe('profissionais',rec.profissionalId)+' — '+(rec.tipo||'')+' '+(rec.serieInicial||'')+' a '+(rec.serieFinal||'');
+  return _rotuloFarma(tab, rec);
+};
+
+/* ---------------- Cadastros e tabelas ---------------- */
+const FARMA_TIPOS_RECEITA=['SIMPLES','CONTROLE ESPECIAL','ANTIMICROBIANO','NOTIFICAÇÃO A','NOTIFICAÇÃO B','NOTIFICAÇÃO B2','NOTIFICAÇÃO ESPECIAL','ORDEM JUDICIAL'];
+Object.assign(CADS, {
+  farmaLocais:{tab:'farmaLocais', titulo:'Locais de estoque', view:'farmaTabelas', ajuda:'Cada lugar que guarda produtos tem o seu estoque: almoxarifado central, farmácia municipal, farmácia de cada UBS, farmácia judicial... (no SIS são as "unidades de trabalho").',
+    campos:[{k:'nome', r:'Nome do local', obr:true, w:2, maiusc:true, unico:true},{k:'tipo', r:'Tipo', t:'sel', op:['ALMOXARIFADO CENTRAL','FARMÁCIA MUNICIPAL','FARMÁCIA DA UNIDADE','DISPENSÁRIO','FARMÁCIA JUDICIAL','OUTRO']},{k:'unidadeId', r:'Unidade de saúde vinculada', t:'ref', tab:'unidades', w:2, dica:'Quem trabalha nessa unidade já abre este estoque'},{k:'responsavelId', r:'Farmacêutico responsável', t:'ref', tab:'profissionais', w:2},{k:'codigoSIS', r:'Código no SIS'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}],
+    cols:[['nome','Local'],['tipo','Tipo'],['unidadeId','Unidade'],['responsavelId','Responsável'],['ativo','Situação']], busca:['nome']},
+  farmaProdutos:{tab:'farmaProdutos', titulo:'Produtos', view:'farmaProdutos', importar:true,
+    campos:[
+      {k:'codigo', r:'Código', unico:true, dica:'Em branco = número automático'}, {k:'nome', r:'Descrição (nome, concentração e forma)', obr:true, w:3, maiusc:true},
+      {k:'tipo', r:'Tipo', t:'sel', op:['MEDICAMENTO','MATERIAL','INSUMO','OUTRO'], padrao:'MEDICAMENTO', vazio:false},
+      {k:'unidadeMedidaId', r:'Unidade', t:'ref', tab:'farmaUnidadesMedida', obr:true},
+      {k:'grupoId', r:'Grupo', t:'ref', tab:'farmaGrupos', obr:true}, {k:'subgrupoId', r:'Subgrupo', t:'ref', tab:'farmaSubgrupos'},
+      {k:'classificacaoId', r:'Classificação', t:'ref', tab:'farmaClassificacoes'},
+      {k:'listaId', r:'Controlado — lista da Portaria 344', t:'ref', tab:'farmaListas', w:2, dica:'Em branco = não é controlado'},
+      {k:'programaId', r:'Programa', t:'ref', tab:'farmaProgramas'}, {k:'laboratorioId', r:'Laboratório / fabricante', t:'ref', tab:'farmaLaboratorios'},
+      {k:'medicamentoId', r:'Medicamento da receita (consultório)', t:'ref', tab:'medicamentos', w:2, dica:'Liga a receita do médico a este produto na dispensação'},
+      {k:'estoqueMinimo', r:'Estoque mínimo', t:'num', passo:'any'}, {k:'estoqueMaximo', r:'Estoque máximo', t:'num', passo:'any'}, {k:'qtdEmbalagem', r:'Unidades por embalagem', t:'int'}, {k:'precoReferencia', r:'Preço de referência (R$)', t:'moeda', dica:'Atualizado pela última entrada'},
+      {k:'codigoBarras', r:'Código de barras (EAN)'}, {k:'catmat', r:'Código CATMAT/BR'}, {k:'codigoSIS', r:'Código no SIS (CADPRO)'},
+      {k:'usoContinuo', r:'Uso contínuo', t:'sim'}, {k:'altoCusto', r:'Alto custo (componente especializado)', t:'sim', w:2}, {k:'ativo', r:'Ativo', t:'sim', padrao:true},
+      {k:'obs', r:'Observações', t:'area', w:4, linhas:2}],
+    cols:[['codigo','Código'],['nome','Produto'],['unidadeMedidaId','Un.'],['grupoId','Grupo'],['listaId','Controlado'],['estoqueMinimo','Mínimo'],['ativo','Situação']], busca:['nome','codigo','codigoSIS','codigoBarras','catmat'], ordem:r=>norm(r.nome)},
+  farmaFornecedores:{tab:'farmaFornecedores', titulo:'Fornecedores', view:'farmaFornecedores', importar:true,
+    campos:[{k:'nome', r:'Nome / razão social', obr:true, w:2, maiusc:true, unico:true},{k:'cnpj', r:'CNPJ / CPF'},{k:'telefone', r:'Telefone', t:'tel'},{k:'email', r:'E-mail', t:'email'},{k:'contato', r:'Contato'},{k:'municipio', r:'Município', maiusc:true},{k:'uf', r:'UF', t:'uf'},{k:'codigoSIS', r:'Código no SIS'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}],
+    cols:[['nome','Fornecedor'],['cnpj','CNPJ'],['telefone','Telefone'],['municipio','Município'],['ativo','Situação']], busca:['nome','cnpj']},
+  farmaGrupos:{tab:'farmaGrupos', titulo:'Grupos', view:'farmaTabelas', campos:[{k:'nome', r:'Grupo', obr:true, w:2, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Grupo'],['ativo','Situação']], busca:['nome']},
+  farmaSubgrupos:{tab:'farmaSubgrupos', titulo:'Subgrupos', view:'farmaTabelas', campos:[{k:'nome', r:'Subgrupo', obr:true, w:2, maiusc:true},{k:'grupoId', r:'Grupo', t:'ref', tab:'farmaGrupos', obr:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Subgrupo'],['grupoId','Grupo'],['ativo','Situação']], busca:['nome']},
+  farmaClassificacoes:{tab:'farmaClassificacoes', titulo:'Classificações', view:'farmaTabelas', campos:[{k:'nome', r:'Classificação', obr:true, w:2, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Classificação'],['ativo','Situação']], busca:['nome']},
+  farmaListas:{tab:'farmaListas', titulo:'Listas de controlados (Portaria 344)', view:'farmaTabelas', ajuda:'Confira com a Portaria SVS/MS 344/98 vigente e as atualizações da Anvisa.', campos:[{k:'nome', r:'Lista', obr:true, maiusc:true, unico:true},{k:'descricao', r:'Descrição', w:2, maiusc:true},{k:'receita', r:'Receita / notificação exigida', w:2, maiusc:true},{k:'validadeReceitaDias', r:'Validade da receita (dias)', t:'int'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Lista'],['descricao','Descrição'],['receita','Receita'],['validadeReceitaDias','Validade']], busca:['nome','descricao']},
+  farmaUnidadesMedida:{tab:'farmaUnidadesMedida', titulo:'Unidades de medida', view:'farmaTabelas', campos:[{k:'sigla', r:'Sigla', obr:true, maiusc:true, unico:true},{k:'nome', r:'Nome', obr:true, w:2, maiusc:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['sigla','Sigla'],['nome','Unidade'],['ativo','Situação']], busca:['sigla','nome']},
+  farmaLaboratorios:{tab:'farmaLaboratorios', titulo:'Laboratórios / fabricantes', view:'farmaTabelas', campos:[{k:'nome', r:'Laboratório', obr:true, w:2, maiusc:true, unico:true},{k:'cnpj', r:'CNPJ'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Laboratório'],['cnpj','CNPJ'],['ativo','Situação']], busca:['nome']},
+  farmaProgramas:{tab:'farmaProgramas', titulo:'Programas', view:'farmaTabelas', campos:[{k:'nome', r:'Programa', obr:true, w:2, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Programa'],['ativo','Situação']], busca:['nome']},
+  farmaTiposLanc:{tab:'farmaTiposLanc', titulo:'Tipos de lançamento', view:'farmaTabelas', campos:[{k:'nome', r:'Tipo', obr:true, w:2, maiusc:true, unico:true},{k:'natureza', r:'Natureza', t:'sel', op:[['E','Entrada'],['S','Saída']], obr:true},{k:'perda', r:'É perda (validade, quebra...)', t:'sim'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Tipo'],['natureza','Natureza'],['perda','Perda'],['ativo','Situação']], busca:['nome']},
+  farmaRecursos:{tab:'farmaRecursos', titulo:'Recursos (fonte)', view:'farmaTabelas', campos:[{k:'nome', r:'Recurso', obr:true, w:2, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Recurso'],['ativo','Situação']], busca:['nome']},
+  farmaBlocos:{tab:'farmaBlocos', titulo:'Blocos de receita retirados', view:'farmaBlocos', ajuda:'Como no SIS: registre os talões entregues a cada profissional. Na dispensação, ao digitar o número da receita/notificação, o prescritor é preenchido sozinho.',
+    campos:[{k:'profissionalId', r:'Profissional', t:'ref', tab:'profissionais', obr:true, w:2},{k:'tipo', r:'Tipo', t:'sel', op:['NOTIFICAÇÃO A','NOTIFICAÇÃO B','NOTIFICAÇÃO B2','NOTIFICAÇÃO ESPECIAL','RECEITA DE CONTROLE ESPECIAL','RECEITUÁRIO COMUM'], obr:true, w:2},{k:'serieInicial', r:'Numeração inicial', obr:true},{k:'serieFinal', r:'Numeração final', obr:true},{k:'data', r:'Data da retirada', t:'data', padrao:()=>hojeISO()},{k:'obs', r:'Observação', w:2},{k:'ativo', r:'Ativo', t:'sim', padrao:true}],
+    cols:[['data','Data'],['profissionalId','Profissional'],['tipo','Tipo'],['serieInicial','De'],['serieFinal','Até']], busca:['serieInicial','serieFinal','tipo'], ordem:r=>String(r.data||'')}
+});
+Object.assign(SEED, {
+  farmaUnidadesMedida:[['CP','COMPRIMIDO'],['CAP','CÁPSULA'],['DR','DRÁGEA'],['FR','FRASCO'],['AMP','AMPOLA'],['FA','FRASCO-AMPOLA'],['BIS','BISNAGA'],['TB','TUBO'],['ENV','ENVELOPE'],['SACHE','SACHÊ'],['ML','MILILITRO'],['G','GRAMA'],['UN','UNIDADE'],['CX','CAIXA'],['PCT','PACOTE'],['SER','SERINGA'],['TIRA','TIRA REAGENTE'],['SUP','SUPOSITÓRIO'],['ADES','ADESIVO'],['CAN','CANETA'],['PAR','PAR'],['RL','ROLO']].map(x=>({sigla:x[0], nome:x[1]})),
+  farmaGrupos:['MEDICAMENTOS','MATERIAL MÉDICO-HOSPITALAR','MATERIAL ODONTOLÓGICO','MATERIAL DE LABORATÓRIO','INSUMOS PARA DIABETES','OUTROS'].map(n=>({nome:n})),
+  farmaClassificacoes:['ANALGÉSICO / ANTITÉRMICO','ANTI-INFLAMATÓRIO','ANTI-HIPERTENSIVO','ANTIDIABÉTICO','HIPOLIPEMIANTE','ANTIBIÓTICO','ANTIPARASITÁRIO','ANTIFÚNGICO','ANTIDEPRESSIVO','ANSIOLÍTICO','ANTICONVULSIVANTE','ANTIPSICÓTICO','PROTETOR GÁSTRICO','ANTI-HISTAMÍNICO','BRONCODILATADOR','CORTICOIDE','DIURÉTICO','HORMÔNIO / CONTRACEPTIVO','VITAMINA / SUPLEMENTO','OUTROS'].map(n=>({nome:n})),
+  farmaListas:[['A1','ENTORPECENTES','NOTIFICAÇÃO DE RECEITA A (AMARELA)'],['A2','ENTORPECENTES DE USO PERMITIDO EM CONCENTRAÇÕES ESPECIAIS','NOTIFICAÇÃO DE RECEITA A (AMARELA)'],['A3','PSICOTRÓPICOS','NOTIFICAÇÃO DE RECEITA A (AMARELA)'],['B1','PSICOTRÓPICOS','NOTIFICAÇÃO DE RECEITA B (AZUL)'],['B2','PSICOTRÓPICOS ANOREXÍGENOS','NOTIFICAÇÃO DE RECEITA B2'],['C1','OUTRAS SUBSTÂNCIAS SUJEITAS A CONTROLE ESPECIAL','RECEITA DE CONTROLE ESPECIAL (2 VIAS)'],['C2','RETINOIDES DE USO SISTÊMICO','NOTIFICAÇÃO DE RECEITA ESPECIAL'],['C3','IMUNOSSUPRESSORES','NOTIFICAÇÃO DE RECEITA ESPECIAL'],['C4','ANTIRRETROVIRAIS','RECEITUÁRIO PRÓPRIO DO PROGRAMA'],['C5','ANABOLIZANTES','RECEITA DE CONTROLE ESPECIAL (2 VIAS)']].map(x=>({nome:x[0], descricao:x[1], receita:x[2], validadeReceitaDias:30})),
+  farmaProgramas:['ATENÇÃO BÁSICA (REMUME)','HIPERDIA','SAÚDE MENTAL','SAÚDE DA MULHER','TUBERCULOSE','HANSENÍASE','IST / AIDS','TABAGISMO','COMPONENTE ESPECIALIZADO (ALTO CUSTO)','AÇÃO JUDICIAL'].map(n=>({nome:n})),
+  farmaTiposLanc:[['ESTOQUE INICIAL','E'],['COMPRA DE FORNECEDOR','E'],['RECEBIMENTO DO ESTADO / MINISTÉRIO','E'],['DOAÇÃO RECEBIDA','E'],['DEVOLUÇÃO DE PACIENTE','E'],['CONSUMO INTERNO DA UNIDADE','S'],['PERDA POR VALIDADE','S',1],['PERDA POR QUEBRA / AVARIA','S',1],['DOAÇÃO / EMPRÉSTIMO A OUTRO MUNICÍPIO','S'],['DEVOLUÇÃO AO FORNECEDOR','S']].map(x=>({nome:x[0], natureza:x[1], perda:!!x[2]})),
+  farmaRecursos:['MUNICIPAL','ESTADUAL','FEDERAL','DOAÇÃO'].map(n=>({nome:n})),
+});
+SEED_FUNCS.farmaSubgrupos=function(){ const g=n=>(lista('farmaGrupos').find(x=>x.nome===n)||{}).id; return [['ATENÇÃO BÁSICA (REMUME)','MEDICAMENTOS'],['CONTROLADOS (PORTARIA 344)','MEDICAMENTOS'],['COMPONENTE ESPECIALIZADO','MEDICAMENTOS'],['PROGRAMAS ESTRATÉGICOS','MEDICAMENTOS'],['CURATIVOS','MATERIAL MÉDICO-HOSPITALAR'],['SERINGAS E AGULHAS','MATERIAL MÉDICO-HOSPITALAR']].filter(x=>g(x[1])).map(x=>({nome:x[0], grupoId:g(x[1])})); };
+VIEWS.farmaFornecedores=()=>viewCad('farmaFornecedores');
+VIEWS.farmaBlocos=()=>viewCad('farmaBlocos');
+VIEWS.farmaProdutos=()=>{
+  const meds=lista('medicamentos').filter(m=>m.ativo!==false && !lista('farmaProdutos').some(p=>p.medicamentoId===m.id));
+  return (pode('farmaProdutos')&&meds.length?`<div class="helpbox">Há <b>${meds.length}</b> medicamento(s) da lista de receitas do consultório sem produto na farmácia. <a href="#" onclick="farmaCriarDosMedicamentos();return false;">Criar os produtos a partir deles</a> (ficam ligados à receita, para a dispensação por receita). Ou traga o cadastro do SIS em <a href="#" onclick="importarAbrir('farmaProdutos');return false;">Importar</a>.</div>`:'')+viewCad('farmaProdutos');
+};
+let TFARMA='farmaLocais';
+VIEWS.farmaTabelas=()=>{ const t=['farmaLocais','farmaGrupos','farmaSubgrupos','farmaClassificacoes','farmaListas','farmaUnidadesMedida','farmaLaboratorios','farmaProgramas','farmaTiposLanc','farmaRecursos']; if(!t.includes(TFARMA)) TFARMA='farmaLocais';
+  return `<div class="tabs">${t.map(x=>`<div class="tab ${TFARMA===x?'active':''}" onclick="TFARMA='${x}';render()">${esc(CADS[x].titulo)} <span class="n">${lista(x).length}</span></div>`).join('')}</div>${TFARMA==='farmaLocais'&&pode('farmaTabelas')&&ativos('unidades').some(u=>!lista('farmaLocais').some(l=>l.unidadeId===u.id))?`<div class="actions mb"><button class="btn secondary" onclick="farmaCriarLocaisDasUnidades()">➕ Criar um local de estoque para cada unidade de saúde</button></div>`:''}${viewCad(TFARMA,{view:'farmaTabelas'})}`; };
+const _cadSalvarFarma=cadSalvar;
+cadSalvar=async function(cadId, id){ if(cadId==='farmaProdutos'){ const el=document.getElementById('cf_codigo'); if(el && !el.value.trim()) el.value=String(await proximoNumero('farprod')).padStart(6,'0'); } return _cadSalvarFarma(cadId, id); };
+function farmaUnidadePorTexto(t){ const x=norm(t); const r=[[/COMPRIM/,'CP'],[/CAPSUL/,'CAP'],[/DRAGEA/,'DR'],[/AMPOLA/,'AMP'],[/FRASCO.?AMPOLA/,'FA'],[/BISNAGA|CREME|POMADA|GEL/,'BIS'],[/FRASCO|SUSPENS|XAROPE|SOLUC|GOTAS|ELIXIR/,'FR'],[/ENVELOPE|SACHE/,'ENV'],[/CANETA/,'CAN'],[/ADESIVO/,'ADES'],[/SUPOSIT/,'SUP'],[/SERINGA/,'SER'],[/TIRA/,'TIRA']].find(p=>p[0].test(x)); const sig=r?r[1]:'UN'; return (lista('farmaUnidadesMedida').find(u=>u.sigla===sig)||lista('farmaUnidadesMedida').find(u=>u.sigla==='UN')||{}).id||''; }
+async function farmaCriarDosMedicamentos(semPerguntar){
+  const meds=lista('medicamentos').filter(m=>m.ativo!==false && !lista('farmaProdutos').some(p=>p.medicamentoId===m.id)); if(!meds.length) return;
+  if(!semPerguntar && !confirm('Criar '+meds.length+' produto(s) a partir dos medicamentos da receita?')) return;
+  const g=(lista('farmaGrupos').find(x=>x.nome==='MEDICAMENTOS')||{}).id, sgB=(lista('farmaSubgrupos').find(x=>x.nome==='ATENÇÃO BÁSICA (REMUME)')||{}).id, sgC=(lista('farmaSubgrupos').find(x=>x.nome==='CONTROLADOS (PORTARIA 344)')||{}).id;
+  let n=Math.max(0, ...lista('farmaProdutos').map(p=>Number(p.codigo)||0));
+  const novos=meds.map(m=>{ const lis=m.controle&&m.controle!=='ATB'?lista('farmaListas').find(l=>l.nome===m.controle||(m.controle==='A'&&l.nome==='A1')):null;
+    return {codigo:String(++n).padStart(6,'0'), nome:m.nome, tipo:'MEDICAMENTO', unidadeMedidaId:farmaUnidadePorTexto(m.apresentacao||m.nome), grupoId:g, subgrupoId:lis?sgC:sgB, listaId:lis?lis.id:'', medicamentoId:m.id, usoContinuo:/HIPERTEN|LOSARTANA|ENALAPRIL|METFORMINA|INSULINA|SINVASTATINA|LEVOTIROX|HIDROCLORO|ANLODIPINO|ATENOLOL|CAPTOPRIL/.test(norm(m.nome)), ativo:true}; });
+  await salvarLote('farmaProdutos', novos); await ajustarContador('farprod', n);
+  registrarAcao('Criou '+novos.length+' produto(s) da farmácia a partir dos medicamentos da receita'); if(!semPerguntar){ showToast(novos.length+' produto(s) criado(s).','success'); render(true); }
+}
+
+/* ---------------- Locais de estoque ---------------- */
+let FARMA_LOCAL=(()=>{ try{ return localStorage.getItem('pis_farma_local')||''; }catch(e){ return ''; } })();
+function farmaLocais(){ return ordenarTexto(ativos('farmaLocais'), l=>l.nome); }
+function farmaLocalAtual(){ const ls=farmaLocais(); if(FARMA_LOCAL && ls.some(l=>l.id===FARMA_LOCAL)) return FARMA_LOCAL; const doUn=ls.find(l=>l.unidadeId===UNIDADE_ATUAL); return (doUn||ls[0]||{}).id||''; }
+function farmaTrocarLocal(id){ FARMA_LOCAL=id; try{ localStorage.setItem('pis_farma_local', id); }catch(e){} render(true); }
+function farmaLocalSel(){
+  const L=farmaLocalAtual(), ls=farmaLocais();
+  if(!ls.length) return `<div class="alerta-aviso">Cadastre os <b>locais de estoque</b> (farmácia, almoxarifado...) em <a href="#" onclick="TFARMA='farmaLocais';goto('farmaTabelas');return false;">Tabelas da Farmácia → Locais de estoque</a>${pode('farmaTabelas')?` ou <a href="#" onclick="farmaCriarLocaisDasUnidades();return false;">crie um para cada unidade de saúde</a>`:''}.</div>`;
+  return `<div class="actions mb"><span class="small">📍 Estoque de:</span><select class="inp" style="width:auto;font-weight:700;" onchange="farmaTrocarLocal(this.value)">${ls.map(l=>`<option value="${l.id}" ${l.id===L?'selected':''}>${esc(l.nome)}</option>`).join('')}</select></div>`;
+}
+function farmaCriarLocaisDasUnidades(){
+  if(semPermissao('farmaTabelas')) return; const ex=new Set(lista('farmaLocais').map(l=>l.unidadeId));
+  const novos=ativos('unidades').filter(u=>!ex.has(u.id)).map(u=>({nome:'FARMÁCIA — '+u.nome, tipo:'FARMÁCIA DA UNIDADE', unidadeId:u.id, ativo:true}));
+  if(!novos.length){ showToast('Todas as unidades já têm local de estoque.','warning'); return; }
+  salvarLote('farmaLocais', novos).then(()=>{ registrarAcao('Criou '+novos.length+' local(is) de estoque'); showToast(novos.length+' local(is) criado(s).','success'); render(true); });
+}
+
+/* ---------------- Motor do estoque ---------------- */
+function farmaCfg(){ return Object.assign({permitirNegativo:false, bloquearVencido:true, diasAlertaValidade:60, diasPadraoTratamento:30, exigirRetiranteControlado:true, exigirLote:true, coberturaMeses:2}, cfgGeral().farma||{}); }
+function farmaInicio(){ return (cfgGeral().farma||{}).inicio||''; }
+function bancoPodeGravar(){ return MODO_DEMO || !ACL || !USUARIO || (ACL.editores||[]).includes(USUARIO.uid); }
+const FARMA_PREF={entrada:'farent', saida:'farsai', transferencia:'fartrf', ajuste:'farajt', dispensacao:'fardsp'};
+const FARMA_TIPO_NOME={entrada:['Entrada','ok'], saida:['Saída interna','ambar'], dispensacao:['Dispensação','azul'], transferencia:['Transferência','roxo'], ajuste:['Ajuste de inventário','cinza']};
+let FARMA_BASE={}, FARMA_CALC={};
+function fchId(L,m){ return 'fch_'+L+'_'+m; }
+function farmaChave(p,l){ return p+'|'+(l||''); }
+function farmaLoteDaChave(k){ return k.slice(k.indexOf('|')+1); }
+function farmaDeltas(d){
+  if(!d || d.status==='cancelado') return []; const out=[];
+  (d.itens||[]).forEach(it=>{ const q=Number(it.qtd)||0; if(!q||!it.produtoId) return; const k=farmaChave(it.produtoId, it.lote);
+    if(d.tipo==='entrada') out.push([d.localId,k,q,it.validade]);
+    else if(d.tipo==='saida'||d.tipo==='dispensacao') out.push([d.localId,k,-q,it.validade]);
+    else if(d.tipo==='transferencia'){ out.push([d.localId,k,-q,it.validade]); out.push([d.destinoId,k,q,it.validade]); }
+    else if(d.tipo==='ajuste') out.push([d.localId,k,q,it.validade]); });
+  return out;
+}
+function farmaAplicar(s, d, L){ farmaDeltas(d).forEach(([loc,k,q,v])=>{ if(loc!==L) return; const x=s[k]||(s[k]={q:0,v:''}); x.q=Math.round((x.q+q)*1000)/1000; if(v && !x.v) x.v=v; }); }
+function farmaDocsDoMes(m){ return lista('farmaDocs').filter(d=>mesDe(d.data)===m).sort((a,b)=>String(a.data+(a.hora||'')).localeCompare(String(b.data+(b.hora||'')))); }
+function farmaClonar(s){ const o={}; Object.keys(s).forEach(k=>{ if(Math.abs(s[k].q)>0.0001) o[k]={q:s[k].q, v:s[k].v||''}; }); return o; }
+/* saldos no fim do mês "mes" (usa o fechamento guardado mais recente e calcula daí em diante) */
+async function farmaSaldosFimDe(L, mes){
+  const ini=farmaInicio(); if(!ini || mes<ini) return {};
+  const atual=mesDe(hojeISO()); let m=mes, base=null;
+  while(m>=ini){ await garantirMeses('farmaFechamentos',[m]); const f=obter('farmaFechamentos', fchId(L,m)); if(f){ base=f; break; } m=addMeses(m,-1); }
+  let s=base?farmaClonar(base.saldos||{}):{}; let mm=base?addMeses(base.mes,1):ini;
+  for(; mm<=mes; mm=addMeses(mm,1)){
+    await garantirMeses('farmaDocs',[mm]); farmaDocsDoMes(mm).forEach(d=>farmaAplicar(s,d,L));
+    if(mm<atual && bancoPodeGravar()) salvar('farmaFechamentos', {id:fchId(L,mm), localId:L, mes:mm, saldos:farmaClonar(s), calculadoEm:agoraLocal()});
+  }
+  return s;
+}
+async function farmaGarantirBase(L){ const prev=addMeses(mesDe(hojeISO()),-1); const s=await farmaSaldosFimDe(L, prev); FARMA_BASE[L]={mes:prev, saldos:s}; }
+function farmaPronto(L){
+  if(!L) return false; const prev=addMeses(mesDe(hojeISO()),-1); const b=FARMA_BASE[L]; if(b && b.mes===prev) return true;
+  if(!FARMA_CALC[L]) FARMA_CALC[L]=farmaGarantirBase(L).catch(e=>{ console.error(e); showToast('Não foi possível calcular o estoque: '+msgErro(e),'error'); }).finally(()=>{ delete FARMA_CALC[L]; render(true); });
+  return false;
+}
+async function farmaPreparar(L){ if(farmaPronto(L)) return; carregandoMsg(true,'Calculando o estoque…'); try{ await (FARMA_CALC[L]||farmaGarantirBase(L)); } finally{ carregandoMsg(false); } }
+function farmaCalculando(){ return `<div class="card center muted" style="padding:30px;"><span class="spinner"></span> Calculando o estoque deste local…</div>`; }
+function farmaSaldos(L){
+  const b=FARMA_BASE[L]||{saldos:{}}; const s={}; Object.keys(b.saldos).forEach(k=>{ s[k]={q:b.saldos[k].q, v:b.saldos[k].v}; });
+  farmaDocsDoMes(mesDe(hojeISO())).forEach(d=>farmaAplicar(s,d,L)); return s;
+}
+function farmaPorProduto(s){ const m={}; Object.keys(s).forEach(k=>{ const p=k.split('|')[0]; const x=s[k]; const o=m[p]||(m[p]={q:0, lotes:[]}); o.q=Math.round((o.q+x.q)*1000)/1000; if(Math.abs(x.q)>0.0001) o.lotes.push({lote:farmaLoteDaChave(k), q:x.q, v:x.v}); }); Object.values(m).forEach(o=>o.lotes.sort((a,b)=>(a.v||'9999').localeCompare(b.v||'9999'))); return m; }
+function farmaLotesDisp(s, pid){ return Object.keys(s).filter(k=>k.split('|')[0]===pid && s[k].q>0).map(k=>({lote:farmaLoteDaChave(k), q:s[k].q, v:s[k].v})).sort((a,b)=>(a.v||'9999').localeCompare(b.v||'9999')); }
+async function farmaInvalidar(locais, mes){
+  const prev=addMeses(mesDe(hojeISO()),-1); locais=unicos(locais);
+  for(let m=mes; m<=prev; m=addMeses(m,1)){ await garantirMeses('farmaFechamentos',[m]); locais.forEach(L=>{ if(obter('farmaFechamentos', fchId(L,m))) excluir('farmaFechamentos', fchId(L,m)); }); }
+  locais.forEach(L=>{ delete FARMA_BASE[L]; });
+}
+function farmaAoMudar(tabs){ if(tabs.has('farmaFechamentos')) FARMA_BASE={}; }
+/* toda gravação de movimento passa aqui: guarda o início do controle e refaz fechamentos de meses já fechados */
+async function farmaSalvarDoc(d, antigo){
+  const r=salvar('farmaDocs', d);
+  const mMin=[mesDe(r.data)].concat(antigo?[mesDe(antigo.data)]:[]).sort()[0];
+  const ini=farmaInicio(); if(!ini || mMin<ini) salvarConfig({farma:{inicio:mMin}});
+  if(mMin<mesDe(hojeISO())) await farmaInvalidar([r.localId, r.destinoId, antigo&&antigo.localId, antigo&&antigo.destinoId].filter(Boolean), mMin);
+  return r;
+}
+async function farmaNumero(pref, data){ const ano=String(data||hojeISO()).slice(0,4); return String(await proximoNumero(pref+'_'+ano)).padStart(6,'0')+'/'+ano; }
+function prodNome(pid){ const p=obter('farmaProdutos',pid); return p?p.nome:'(produto removido)'; }
+function prodUn(pid){ const p=obter('farmaProdutos',pid)||{}; const u=obter('farmaUnidadesMedida',p.unidadeMedidaId); return u?u.sigla:''; }
+function prodControlado(pid){ const p=obter('farmaProdutos',pid)||{}; return p.listaId?obter('farmaListas',p.listaId)||null:null; }
+function farmaAcharProduto(txt){ const t=String(txt||'').trim(); if(!t) return null; const dg=soDigitos(t);
+  return lista('farmaProdutos').find(p=>p.ativo!==false && ((dg && p.codigoBarras && soDigitos(p.codigoBarras)===dg) || (p.codigo && String(p.codigo)===t) || (p.codigo && dg && soDigitos(p.codigo)===dg) || (p.codigoSIS && (String(p.codigoSIS)===t || (dg.length>=6 && soDigitos(p.codigoSIS)===dg))))) || null; }
+function farmaValidadeBadge(v){ if(!v) return ''; const dias=diffDias(hojeISO(), v); if(dias<0) return '<span class="badge ruim">vencido</span>'; if(dias<=farmaCfg().diasAlertaValidade) return `<span class="badge ambar">vence em ${dias} d</span>`; return ''; }
+function farmaMarcarMesPaciente(pid, data){ const p=obter('pacientes',pid); if(!p) return; const m=mesDe(data); if((p.mesesFarma||[]).includes(m)) return; salvar('pacientes', Object.assign({}, p, {mesesFarma:unicos((p.mesesFarma||[]).concat([m])).sort()})); }
+async function farmaSaldosEm(L, data){ const m=mesDe(data); const s=await farmaSaldosFimDe(L, addMeses(m,-1)); await garantirMeses('farmaDocs',[m]); farmaDocsDoMes(m).filter(d=>d.data<=data).forEach(d=>farmaAplicar(s,d,L)); return s; }
+
+/* ---------------- Documentos (entrada, saída interna, transferência) ---------------- */
+const FDOC_CAMPOS={
+  entrada:[{k:'data', r:'Data da entrada', t:'data', obr:true},{k:'tipoLancId', r:'Tipo de lançamento', t:'ref', tab:'farmaTiposLanc', filtro:r=>r.natureza==='E', obr:true, w:2},{k:'recursoId', r:'Recurso (fonte)', t:'ref', tab:'farmaRecursos'},
+    {k:'fornecedorId', r:'Fornecedor', t:'ref', tab:'farmaFornecedores', w:2},{k:'nf', r:'Nº da nota fiscal'},{k:'nfEmissao', r:'Emissão da NF', t:'data'},
+    {k:'pedidoId', r:'Pedido de compra (opcional)', t:'sel', op:()=>{ const l=farmaPedidosAbertos(); const cur=FDOC&&FDOC.antigo&&FDOC.antigo.pedidoId; if(cur && !l.some(p=>p.id===cur) && obter('farmaPedidos',cur)) l.push(obter('farmaPedidos',cur)); return l.map(p=>[p.id, p.numero+' — '+nomeDe('farmaFornecedores',p.fornecedorId)]); }, on:'onchange="farmaDocDoPedido(this.value)"', w:2},{k:'empenho', r:'Empenho'},{k:'obs', r:'Observação'}],
+  saida:[{k:'data', r:'Data', t:'data', obr:true},{k:'tipoLancId', r:'Tipo de saída', t:'ref', tab:'farmaTiposLanc', filtro:r=>r.natureza==='S', obr:true, w:2},{k:'destino', r:'Destino / setor / motivo', maiusc:true},{k:'obs', r:'Observação', w:4}],
+  transferencia:[{k:'data', r:'Data', t:'data', obr:true},{k:'destinoId', r:'Para (local de estoque de destino)', t:'ref', tab:'farmaLocais', obr:true, w:2},{k:'obs', r:'Observação', w:4}],
+};
+const FARMA_VIEW_DO_TIPO={entrada:'farmaEntradas', saida:'farmaSaidas', transferencia:'farmaTransferencias'};
+let FDOC=null;
+async function farmaDocAbrir(tipo, id){
+  const antigo=id?obter('farmaDocs',id):null; if(antigo && (antigo.status==='cancelado' || tipo!=='entrada')){ farmaDocVer(id); return; }
+  const L=antigo?antigo.localId:farmaLocalAtual(); if(!L){ showToast('Cadastre um local de estoque.','warning'); return; }
+  if(!pode(FARMA_VIEW_DO_TIPO[tipo])){ showToast('Seu perfil não pode lançar aqui.','warning'); return; }
+  await farmaPreparar(L);
+  FDOC={tipo, id:id||null, antigo, localId:L, itens:JSON.parse(JSON.stringify((antigo&&antigo.itens)||[])), modal:null};
+  const t={entrada:'📥 Entrada de produtos', saida:'📤 Saída interna / perda', transferencia:'🔄 Transferência'}[tipo];
+  FDOC.modal=abrirModal({titulo:t+(antigo?' nº '+esc(antigo.numero):'')+' — '+esc(nomeDe('farmaLocais',L)), tamanho:'m-cheio', corpo:formHTML('fd', FDOC_CAMPOS[tipo], antigo||{data:hojeISO()})+
+    `<h3>Itens</h3>${tipo==='entrada'?`<div class="actions mb"><label class="btn secondary small" style="cursor:pointer;">🧾 Ler o XML da nota fiscal (NF-e)<input type="file" accept=".xml" style="display:none" onchange="farmaLerNFe(event)"></label><label class="btn secondary small" style="cursor:pointer;">⭱ Importar itens de planilha (estoque do SIS, Excel, CSV)<input type="file" accept=".xlsx,.xls,.csv,.txt,.xml" style="display:none" onchange="farmaImportarItens(event)"></label></div>`:''}
+    <div class="formgrid"><div class="field"><label>Código / código de barras</label><input class="inp" id="fdCod" placeholder="Leia e tecle Enter" onkeydown="if(event.key==='Enter'){event.preventDefault();farmaDocCodigo(this.value);this.value='';}"></div><div class="field w3"><label>ou procure o produto</label>${pickerHTML('fdProd','farmaProdutos','',{ph:'Nome ou código do produto', aoEscolher:'farmaDocAddProd'})}</div></div><div id="fdItens" class="mt"></div>`,
+    botoes:[{r:'💾 Salvar', fn:'farmaDocSalvar()'}], botoesEsq: antigo?[{r:'🖨️ Imprimir', fn:`farmaImprimirDoc('${antigo.id}')`},{r:'Cancelar este lançamento', cls:'danger', fn:`farmaDocCancelar('${antigo.id}')`}]:[]});
+  farmaDocRender();
+}
+function farmaDocAddProd(id, p){ if(!p) return; const it={produtoId:p.id, lote:'', validade:'', qtd:''};
+  if(FDOC.tipo!=='entrada'){ const l=farmaLotesDisp(farmaSaldos(FDOC.localId), p.id)[0]; if(l){ it.lote=l.lote; it.validade=l.v; } } else if(p.precoReferencia) it.valorUnit=p.precoReferencia;
+  FDOC.itens.push(it); pickerDefinir('fdProd',''); farmaDocRender(); }
+function farmaDocCodigo(t){ const p=farmaAcharProduto(t); if(p) farmaDocAddProd('', p); else showToast('Código não encontrado: '+t,'warning'); }
+function farmaDocLote(i, l){ const it=FDOC.itens[i]; it.lote=l; const x=farmaSaldos(FDOC.localId)[farmaChave(it.produtoId,l)]; it.validade=x?x.v:''; farmaDocRender(); }
+function farmaDocRowProd(id, p){ const i=Number(String(id).replace('fdRow','')); if(p && FDOC.itens[i]){ FDOC.itens[i].produtoId=p.id; farmaDocRender(); } }
+function farmaDocRender(){
+  const el=document.getElementById('fdItens'); if(!el||!FDOC) return; const ent=FDOC.tipo==='entrada'; const s=ent?null:farmaSaldos(FDOC.localId);
+  const tot=FDOC.itens.reduce((t,i)=>t+(Number(i.qtd)||0)*(Number(i.valorUnit)||0),0);
+  el.innerHTML = FDOC.itens.length ? `<div class="table-wrap" style="max-height:420px;"><table class="lab-res"><thead><tr><th>Produto</th>${ent?'<th>Lote</th><th>Validade</th><th>Qtd</th><th>Valor unit.</th><th>Total</th>':'<th>Lote / validade</th><th>Disponível</th><th>Qtd</th>'}<th></th></tr></thead><tbody>${FDOC.itens.map((it,i)=>{
+    const prod=it.produtoId?`<b>${esc(prodNome(it.produtoId))}</b> <span class="muted small">${esc(prodUn(it.produtoId))}</span>${prodControlado(it.produtoId)?` <span class="badge ruim">${esc(prodControlado(it.produtoId).nome)}</span>`:''}`:`<div style="min-width:260px;">${pickerHTML('fdRow'+i,'farmaProdutos','',{ph:'Escolha o produto', aoEscolher:'farmaDocRowProd'})}</div>`;
+    const xml=it.xml?`<div class="small muted">NF: ${esc(it.xml)}</div>`:'';
+    if(ent) return `<tr style="${it.produtoId?'':'background:#FFF7E0;'}"><td>${prod}${xml}</td><td><input class="inp" style="width:110px;" value="${esc(it.lote||'')}" onchange="FDOC.itens[${i}].lote=this.value.trim().toUpperCase()"></td><td><input type="date" class="inp" style="width:140px;" value="${esc(it.validade||'')}" onchange="FDOC.itens[${i}].validade=this.value"></td><td><input class="inp" style="width:90px;" inputmode="decimal" value="${it.qtd??''}" onchange="FDOC.itens[${i}].qtd=numBR(this.value);farmaDocRender()"></td><td><input class="inp" style="width:90px;" inputmode="decimal" value="${it.valorUnit??''}" onchange="FDOC.itens[${i}].valorUnit=numBR(this.value);farmaDocRender()"></td><td class="num">${fmtMoeda((Number(it.qtd)||0)*(Number(it.valorUnit)||0))}</td><td><button class="btn ghost small" onclick="FDOC.itens.splice(${i},1);farmaDocRender()">🗑</button></td></tr>`;
+    const lotes=farmaLotesDisp(s, it.produtoId); const disp=(s[farmaChave(it.produtoId,it.lote)]||{q:0}).q;
+    return `<tr><td>${prod}</td><td><select class="inp" onchange="farmaDocLote(${i},this.value)">${lotes.map(l=>`<option value="${esc(l.lote)}" ${l.lote===it.lote?'selected':''}>${esc(l.lote||'sem lote')} — ${l.v?fmtData(l.v):'s/ validade'} (${fmtNum(l.q)})</option>`).join('')}${!lotes.some(l=>l.lote===it.lote)?`<option value="${esc(it.lote||'')}" selected>${esc(it.lote||'sem lote')} (sem saldo)</option>`:''}</select> ${farmaValidadeBadge(it.validade)}</td><td class="num ${disp<(Number(it.qtd)||0)?'vital-alerta':''}">${fmtNum(disp)}</td><td><input class="inp" style="width:90px;" inputmode="decimal" value="${it.qtd??''}" onchange="FDOC.itens[${i}].qtd=numBR(this.value);farmaDocRender()"></td><td><button class="btn ghost small" onclick="FDOC.itens.splice(${i},1);farmaDocRender()">🗑</button></td></tr>`; }).join('')}</tbody></table></div>${ent?`<div class="right mt"><b>Total: ${fmtMoeda(tot)}</b></div>`:''}` : '<div class="muted small">Leia o código de barras ou procure o produto.</div>';
+}
+function farmaPedidosAbertos(){ return lista('farmaPedidos').filter(p=>p.status!=='cancelado' && farmaPedidoSituacao(p)[0]!=='Atendido'); }
+function farmaDocDoPedido(pid){
+  const p=obter('farmaPedidos',pid); if(!p||!FDOC) return; const f=document.getElementById('fd_fornecedorId'); if(f && p.fornecedorId) f.value=p.fornecedorId;
+  (p.itens||[]).forEach(i=>{ const falta=Math.max(0,(Number(i.qtd)||0)-(Number(i.recebido)||0)); if(falta>0 && !FDOC.itens.some(x=>x.produtoId===i.produtoId)) FDOC.itens.push({produtoId:i.produtoId, lote:'', validade:'', qtd:falta, valorUnit:i.valorUnit||''}); });
+  farmaDocRender();
+}
+async function farmaDocSalvar(){
+  const tipo=FDOC.tipo; const {d, erros}=formLer('fd', FDOC_CAMPOS[tipo]); if(mostrarErros(erros)) return;
+  if(d.data>hojeISO()){ showToast('A data não pode ser futura.','warning'); return; }
+  if(tipo==='transferencia' && d.destinoId===FDOC.localId){ showToast('O destino precisa ser outro local.','warning'); return; }
+  const itens=FDOC.itens.filter(i=>Number(i.qtd)>0);
+  if(itens.some(i=>!i.produtoId)){ showToast('Há itens sem produto escolhido (linhas em amarelo).','warning'); return; }
+  if(!itens.length){ showToast('Informe os itens e as quantidades.','warning'); return; }
+  const cfg=farmaCfg(); const probs=[];
+  if(tipo==='entrada'){ if(cfg.exigirLote) itens.filter(i=>(obter('farmaProdutos',i.produtoId)||{}).tipo==='MEDICAMENTO' && (!i.lote||!i.validade)).forEach(i=>probs.push(prodNome(i.produtoId)+': informe lote e validade')); }
+  else farmaChecarSaldo(FDOC.localId, itens, probs, false);
+  if(probs.length){ showToast(probs.slice(0,3).join(' · ')+(probs.length>3?' …':''),'warning'); return; }
+  const antigo=FDOC.antigo;
+  const rec=Object.assign({}, antigo||{}, d, {tipo, numero:antigo?antigo.numero:await farmaNumero(FARMA_PREF[tipo], d.data), hora:(antigo&&antigo.hora)||horaAgora(), localId:FDOC.localId,
+    itens:itens.map(i=>({produtoId:i.produtoId, lote:String(i.lote||'').trim().toUpperCase(), validade:i.validade||'', qtd:Number(i.qtd), valorUnit:Number(i.valorUnit)||''})), status:'ativo'});
+  if(!rec.id) delete rec.id;
+  const salvo=await farmaSalvarDoc(rec, antigo);
+  if(tipo==='entrada'){ farmaAtualizarPrecos(salvo.itens); farmaPedidoAplicar(antigo&&antigo.pedidoId, antigo&&antigo.itens, -1); farmaPedidoAplicar(salvo.pedidoId, salvo.itens, 1); }
+  registrarAcao((antigo?'Alterou ':'Lançou ')+FARMA_TIPO_NOME[tipo][0].toLowerCase()+' nº '+salvo.numero+' ('+itens.length+' itens) em '+nomeDe('farmaLocais',salvo.localId));
+  fecharModal(FDOC.modal); FDOC=null; showToast('Lançamento '+salvo.numero+' salvo.','success');
+  if(confirm('Imprimir o documento?')) farmaImprimirDoc(salvo.id);
+}
+function farmaChecarSaldo(L, itens, probs, vencidoBloqueia){
+  const cfg=farmaCfg(); const s=farmaSaldos(L); const pedido={};
+  itens.forEach(i=>{ const k=farmaChave(i.produtoId,i.lote); pedido[k]=(pedido[k]||0)+Number(i.qtd); if(vencidoBloqueia && cfg.bloquearVencido && i.validade && i.validade<hojeISO()) probs.push(prodNome(i.produtoId)+': lote '+(i.lote||'')+' vencido'); });
+  if(!cfg.permitirNegativo) Object.keys(pedido).forEach(k=>{ const disp=(s[k]||{q:0}).q; if(pedido[k]>disp+0.0001) probs.push(prodNome(k.split('|')[0])+': pedido '+fmtNum(pedido[k])+', disponível '+fmtNum(disp)+' no lote '+(farmaLoteDaChave(k)||'sem lote')); });
+}
+function farmaAtualizarPrecos(itens){ (itens||[]).forEach(i=>{ const v=Number(i.valorUnit); if(!v) return; const p=obter('farmaProdutos',i.produtoId); if(p && Number(p.precoReferencia)!==v) salvar('farmaProdutos', Object.assign({}, p, {precoReferencia:v})); }); }
+function farmaPedidoAplicar(pedId, itens, sinal){
+  if(!pedId||!itens) return; const p=obter('farmaPedidos',pedId); if(!p) return; const c=JSON.parse(JSON.stringify(p));
+  itens.forEach(i=>{ const it=c.itens.find(x=>x.produtoId===i.produtoId); if(it) it.recebido=Math.max(0, Math.round(((Number(it.recebido)||0)+sinal*Number(i.qtd))*1000)/1000); });
+  salvar('farmaPedidos', c);
+}
+async function farmaDocCancelar(id){
+  const d=obter('farmaDocs',id); if(!d||d.status==='cancelado') return; if(!pode(FARMA_VIEW_DO_TIPO[d.tipo]||'farmaEntradas')){ showToast('Seu perfil não pode cancelar.','warning'); return; }
+  const mot=prompt('Motivo do cancelamento do lançamento nº '+d.numero+':',''); if(!mot) return;
+  if(d.tipo==='entrada'){ await farmaPreparar(d.localId); const s=farmaSaldos(d.localId); const neg=(d.itens||[]).filter(i=>((s[farmaChave(i.produtoId,i.lote)]||{q:0}).q - Number(i.qtd)) < -0.0001); if(neg.length && !confirm('Atenção: parte desta entrada já saiu do estoque — cancelar deixa o saldo negativo em: '+neg.map(i=>prodNome(i.produtoId)).join(', ')+'. Cancelar mesmo assim?')) return; }
+  const novo=Object.assign({}, d, {status:'cancelado', canceladoEm:agoraLocal(), canceladoPor:usuarioCurto(), motivoCancelamento:mot});
+  await farmaSalvarDoc(novo, d); if(d.tipo==='entrada') farmaPedidoAplicar(d.pedidoId, d.itens, -1);
+  registrarAcao('Cancelou o lançamento nº '+d.numero+': '+mot); while(MODAIS.length) fecharModalTopo(); showToast('Lançamento cancelado.','success'); render(true);
+}
+function farmaDocHistorico(d, clin){
+  const tl=nomeDe('farmaTiposLanc', d.tipoLancId);
+  if(d.tipo==='entrada') return 'Entrada nº '+d.numero+(tl?' — '+tl:'')+(d.fornecedorId?' — '+nomeDe('farmaFornecedores',d.fornecedorId):'')+(d.nf?' — NF '+d.nf:'');
+  if(d.tipo==='saida') return 'Saída nº '+d.numero+(tl?' — '+tl:'')+(d.destino?' — '+d.destino:'');
+  if(d.tipo==='transferencia') return 'Transferência nº '+d.numero+' — '+nomeDe('farmaLocais',d.localId)+' → '+nomeDe('farmaLocais',d.destinoId);
+  if(d.tipo==='ajuste') return 'Ajuste de inventário nº '+d.numero;
+  if(d.tipo==='dispensacao'){ const dp=clin&&d.dispId?obter('farmaDisp',d.dispId):null; return 'Dispensação nº '+d.numero+(dp?' — '+nomeDe('pacientes',dp.pacienteId):''); }
+  return d.tipo;
+}
+function farmaDocVer(id){
+  const d=obter('farmaDocs',id); if(!d) return; const st=d.status==='cancelado';
+  abrirModal({titulo:esc(FARMA_TIPO_NOME[d.tipo][0])+' nº '+esc(d.numero)+(st?' — CANCELADO':''), tamanho:'m-grande', corpo:`${st?`<div class="alerta-erro">Cancelado em ${esc(fmtDataHora(d.canceladoEm))} por ${esc(d.canceladoPor||'')}: ${esc(d.motivoCancelamento||'')}</div>`:''}<div class="helpbox">${esc(farmaDocHistorico(d, podeClinico()))} · ${fmtData(d.data)} ${esc(d.hora||'')} · lançado por ${esc(d.criadoPor||'')}${d.obs?'<br>'+esc(d.obs):''}</div>`+
+    tabelaHTML(['Produto','Lote','Validade','Qtd','Valor'], (d.itens||[]).map(i=>[prodNome(i.produtoId)+' ('+prodUn(i.produtoId)+')', i.lote||'', fmtData(i.validade), fmtNum(i.qtd), i.valorUnit?fmtMoeda(i.qtd*i.valorUnit):''])),
+    botoesEsq:[{r:'🖨️ Imprimir', fn:`farmaImprimirDoc('${d.id}')`}].concat(!st && d.tipo!=='dispensacao' && d.tipo!=='ajuste' && pode(FARMA_VIEW_DO_TIPO[d.tipo])?[{r:'Cancelar este lançamento', cls:'danger', fn:`farmaDocCancelar('${d.id}')`}]:[])});
+}
+function farmaImprimirDoc(id){
+  const d=obter('farmaDocs',id); if(!d) return; const loc=obter('farmaLocais',d.localId)||{};
+  const tit={entrada:'Requisição de Entrada', saida:'Requisição de Saída Interna', transferencia:'Guia de Transferência de Estoque', ajuste:'Ajuste de Inventário', dispensacao:'Dispensação'}[d.tipo];
+  const tot=(d.itens||[]).reduce((t,i)=>t+(Number(i.qtd)||0)*(Number(i.valorUnit)||0),0);
+  imprimirHTML(docCabecalho(tit, 'Nº <b>'+esc(d.numero)+'</b>'+(d.status==='cancelado'?' — <b>CANCELADO</b>':''), loc.unidadeId)+
+    `<div class="doc-box"><div class="doc-grid"><div><span>Data</span>${fmtData(d.data)} ${esc(d.hora||'')}</div><div style="grid-column:span 2;"><span>Local de estoque</span>${esc(loc.nome||'')}</div><div><span>Tipo</span>${esc(nomeDe('farmaTiposLanc',d.tipoLancId)||FARMA_TIPO_NOME[d.tipo][0])}</div>
+      ${d.tipo==='entrada'?`<div style="grid-column:span 2;"><span>Fornecedor</span>${esc(nomeDe('farmaFornecedores',d.fornecedorId)||'—')}</div><div><span>Nota fiscal</span>${esc(d.nf||'—')} ${d.nfEmissao?'de '+fmtData(d.nfEmissao):''}</div><div><span>Empenho</span>${esc(d.empenho||'—')}</div>`:''}
+      ${d.tipo==='transferencia'?`<div style="grid-column:span 2;"><span>Destino</span><b>${esc(nomeDe('farmaLocais',d.destinoId))}</b></div>`:''}${d.destino?`<div style="grid-column:span 2;"><span>Destino / motivo</span>${esc(d.destino)}</div>`:''}</div></div>
+    ${tabelaHTML(['#','Código','Produto','Un.','Lote','Validade','Quantidade'].concat(d.tipo==='entrada'?['Valor unit.','Total']:[]), (d.itens||[]).map((i,n)=>[n+1, (obter('farmaProdutos',i.produtoId)||{}).codigo||'', prodNome(i.produtoId), prodUn(i.produtoId), i.lote||'', fmtData(i.validade), fmtNum(i.qtd)].concat(d.tipo==='entrada'?[i.valorUnit?fmtMoeda(i.valorUnit):'', i.valorUnit?fmtMoeda(i.qtd*i.valorUnit):'']:[])), {num:[6,7,8], rodape:d.tipo==='entrada'?['','','','','','','','Total',fmtMoeda(tot)]:null})}
+    ${d.obs?`<div class="doc-box mt">Obs.: ${esc(d.obs)}</div>`:''}
+    <div class="linha-ass"><div>${d.tipo==='transferencia'?'Enviado por':'Responsável pelo lançamento'}</div><div>${d.tipo==='transferencia'?'Recebido por (nome, data e hora)':d.tipo==='entrada'?'Conferido por':'Autorizado por'}</div></div>`, 'paisagem');
+}
+const FDF={ini:addDias(hojeISO(),-30), fim:hojeISO(), busca:''};
+function farmaListaDocsHTML(tipo){
+  const L=farmaLocalAtual(); const view=FARMA_VIEW_DO_TIPO[tipo];
+  exigirPeriodo(['farmaDocs'], FDF.ini, FDF.fim);
+  let l=lista('farmaDocs').filter(d=>d.tipo===tipo && d.data>=FDF.ini && d.data<=FDF.fim && (d.localId===L || (tipo==='transferencia' && d.destinoId===L)));
+  if(FDF.busca){ const t=norm(FDF.busca); l=l.filter(d=>norm(farmaDocHistorico(d)+' '+(d.itens||[]).map(i=>prodNome(i.produtoId)).join(' ')).includes(t)); }
+  l.sort((a,b)=>String(b.data+(b.hora||'')).localeCompare(String(a.data+(a.hora||''))));
+  return `${farmaLocalSel()}<div class="card"><div class="flexrow mb"><div class="actions">De <input type="date" class="inp" style="width:auto;" value="${FDF.ini}" onchange="FDF.ini=this.value;render()"> a <input type="date" class="inp" style="width:auto;" value="${FDF.fim}" onchange="FDF.fim=this.value;render()"><input class="inp" style="max-width:240px;" placeholder="🔎 nº, fornecedor, produto" value="${esc(FDF.busca)}" oninput="FDF.busca=this.value;debRender()"><span class="muted small">${l.length} lançamento(s)</span></div>
+    ${pode(view)&&L?`<button class="btn big" onclick="farmaDocAbrir('${tipo}')">+ ${tipo==='entrada'?'Nova entrada':tipo==='saida'?'Nova saída / perda':'Nova transferência'}</button>`:''}</div>
+  ${tabelaHTML(['Nº','Data','Descrição','Itens','Valor','Situação',''], l.slice(0,400).map(d=>[`<b>${esc(d.numero)}</b>`, fmtData(d.data), esc(farmaDocHistorico(d))+(tipo==='transferencia'&&d.destinoId===L?' <span class="badge ok">recebida</span>':''), (d.itens||[]).length, d.tipo==='entrada'?fmtMoeda((d.itens||[]).reduce((t,i)=>t+(Number(i.qtd)||0)*(Number(i.valorUnit)||0),0)):'', d.status==='cancelado'?'<span class="badge cinza">cancelado</span>':'<span class="badge ok">ativo</span>', `<button class="btn ghost small" onclick="farmaDocAbrir('${tipo}','${d.id}')">${tipo==='entrada'&&d.status!=='cancelado'&&pode(view)?'✏️':'👁'}</button><button class="btn ghost small" onclick="farmaImprimirDoc('${d.id}')">🖨️</button>`]), {html:true})}</div>`;
+}
+VIEWS.farmaEntradas=()=>`<div class="helpbox">Como a <b>Requisição de Entrada</b> do SIS: por produto, pelo pedido de compra, pelo <b>XML da nota fiscal</b> ou importando a planilha de estoque do SIS (bom para o <b>estoque inicial</b>).</div>`+farmaListaDocsHTML('entrada');
+VIEWS.farmaSaidas=()=>`<div class="helpbox">Saídas que não são para paciente: consumo da própria unidade, perdas (validade, quebra), doações e devoluções. A dispensação ao paciente fica em <a href="#" onclick="goto('farmaDispensacao');return false;">Dispensação</a>.</div>`+farmaListaDocsHTML('saida');
+VIEWS.farmaTransferencias=()=>`<div class="helpbox">Tira do estoque deste local e põe no estoque do destino na mesma hora. Imprima a guia para quem recebe assinar.</div>`+farmaListaDocsHTML('transferencia');
+
+/* ---------------- NF-e (XML) e planilha de itens ---------------- */
+function xmlEls(el, n){ return el?[...el.getElementsByTagNameNS('*', n)]:[]; }
+function xmlTxt(el, n){ const e=xmlEls(el,n)[0]; return e?e.textContent.trim():''; }
+/* Palavras de um nome de produto: "METFORMINA CLORIDRATO 850MG CPR" → METFORMINA CLORIDRATO 850 MG CPR */
+function farmaPalavras(s){ return norm(s).replace(/(\d)([A-Z])/g,'$1 $2').replace(/([A-Z])(\d)/g,'$1 $2').replace(/(\d),(\d)/g,'$1.$2').replace(/[^A-Z0-9.]+/g,' ').split(' ').filter(t=>t && !['DE','DA','DO','E','COM','EM','PARA'].includes(t)); }
+/* Casa a descrição de outro sistema/NF com o produto: todas as palavras e números do produto têm de estar lá */
+function farmaMelhorProduto(nome, ean){
+  if(ean && !/SEM ?GTIN/i.test(ean)){ const p=lista('farmaProdutos').find(x=>x.codigoBarras && soDigitos(x.codigoBarras)===soDigitos(ean)); if(p) return p; }
+  const t=new Set(farmaPalavras(nome)); let best=null, sc=0;
+  ativos('farmaProdutos').forEach(p=>{ const w=farmaPalavras(p.nome); if(!w.length) return; const cobre=w.every(x=>t.has(x)); const s=cobre ? 2+w.length/100 : similaridade(norm(nome), norm(p.nome)); if(s>sc){ sc=s; best=p; } });
+  return sc>=2 || sc>=0.82 ? best : null;
+}
+async function farmaLerNFe(ev){
+  const f=ev.target.files[0]; ev.target.value=''; if(!f||!FDOC) return;
+  try{
+    const doc=new DOMParser().parseFromString(impTexto(await f.arrayBuffer()), 'application/xml'); if(doc.getElementsByTagName('parsererror').length) throw new Error('XML inválido');
+    const ide=xmlEls(doc,'ide')[0], emit=xmlEls(doc,'emit')[0]; if(!ide||!emit) throw new Error('não parece uma NF-e');
+    const nf=xmlTxt(ide,'nNF'), em=(xmlTxt(ide,'dhEmi')||xmlTxt(ide,'dEmi')).slice(0,10), cnpj=xmlTxt(emit,'CNPJ')||xmlTxt(emit,'CPF'), razao=xmlTxt(emit,'xNome');
+    const set=(k,v)=>{ const e=document.getElementById('fd_'+k); if(e && v) e.value=v; }; set('nf', nf); set('nfEmissao', em);
+    let forn=lista('farmaFornecedores').find(x=>soDigitos(x.cnpj)===soDigitos(cnpj));
+    if(!forn && razao && confirm('Fornecedor "'+razao+'" ainda não está cadastrado. Cadastrar agora?')) forn=salvar('farmaFornecedores', {nome:razao.toUpperCase(), cnpj:soDigitos(cnpj), ativo:true});
+    if(forn){ const s=document.getElementById('fd_fornecedorId'); if(s){ if(![...s.options].some(o=>o.value===forn.id)) s.add(new Option(forn.nome, forn.id)); s.value=forn.id; } }
+    let n=0, sem=0;
+    xmlEls(doc,'det').forEach(det=>{ const prod=xmlEls(det,'prod')[0]; if(!prod) return;
+      const xProd=xmlTxt(prod,'xProd'), uCom=xmlTxt(prod,'uCom'), qCom=Number(xmlTxt(prod,'qCom'))||0, vUn=Number(xmlTxt(prod,'vUnCom'))||0, ean=xmlTxt(prod,'cEAN');
+      const p=farmaMelhorProduto(xProd, ean); const emb=p&&Number(p.qtdEmbalagem)>1&&/^(CX|CAIXA|CXA|EMB|PCT|PC)/i.test(uCom)?Number(p.qtdEmbalagem):1;
+      let lotes=xmlEls(det,'rastro').map(r=>({lote:xmlTxt(r,'nLote'), q:Number(xmlTxt(r,'qLote'))||0, v:xmlTxt(r,'dVal').slice(0,10)}));
+      if(!lotes.length) lotes=xmlEls(det,'med').filter(m=>xmlTxt(m,'nLote')).map(m=>({lote:xmlTxt(m,'nLote'), q:Number(xmlTxt(m,'qLote'))||0, v:xmlTxt(m,'dVal').slice(0,10)}));
+      if(!lotes.length) lotes=[{lote:'', q:qCom, v:''}];
+      lotes.forEach(l=>{ FDOC.itens.push({produtoId:p?p.id:'', lote:String(l.lote||'').toUpperCase(), validade:l.v||'', qtd:Math.round((l.q||qCom)*emb*1000)/1000, valorUnit:emb>1?Math.round(vUn/emb*10000)/10000:vUn, xml:xProd+' — '+fmtNum(l.q||qCom)+' '+uCom+(emb>1?' × '+emb:'')}); n++; if(!p) sem++; });
+    });
+    farmaDocRender(); showToast('NF '+nf+': '+n+' item(ns) lido(s)'+(sem?', '+sem+' sem produto ligado — escolha nas linhas em amarelo':'')+'. Confira lotes, validades e quantidades.', sem?'warning':'success');
+  }catch(e){ console.error(e); showToast('Não foi possível ler o XML: '+(e.message||e),'error'); }
+}
+async function farmaImportarItens(ev){
+  const f=ev.target.files[0]; ev.target.value=''; if(!f||!FDOC) return;
+  try{
+    let cab, linhas;
+    if(/\.xml$/i.test(f.name)){ const d=new DOMParser().parseFromString(impTexto(await f.arrayBuffer()),'application/xml'); const rows=[...d.getElementsByTagName('ROW')]; cab=unicos(rows.flatMap(r=>[...r.attributes].map(a=>a.name))); linhas=rows.map(r=>cab.map(c=>r.getAttribute(c)||'')); }
+    else { const pl=await lerPlanilha(f); cab=pl.cab; linhas=pl.linhas; }
+    const C=cab.map(impCompacto); const col=sins=>{ const s=sins.map(impCompacto); return C.findIndex(h=>s.includes(h)); };
+    const iCod=col(['CADPRO','CODIGO','COD','CD_PRODUTO','CODIGO_PRODUTO']), iNome=col(['DISC1','DESCRICAO','PRODUTO','NOME','DESC1','MEDICAMENTO']), iLote=col(['LOTE','NLOTE','NU_LOTE']), iVal=col(['VALIDADE','DT_VALIDADE','DATA_VALIDADE','VENCIMENTO']), iQtd=col(['ESTOQUE','QUANTIDADE','QTD','QUAN','QUAN1','QUAN3','SALDO','QTDE']), iVal2=col(['VAUN','VAUN1','VALOR','VALOR_UNITARIO','PRECO','VALOR_UNT','VAUNVEN']), iUn=col(['UNID1','UNIDADE','UN','UNID']);
+    if(iQtd<0 || (iCod<0 && iNome<0)){ showToast('Não achei as colunas de produto e quantidade (ex.: CADPRO/DISC1 e ESTOQUE/QUANTIDADE).','warning'); return; }
+    const faltam=[]; const novos=[];
+    linhas.forEach(l=>{ const q=numBR(l[iQtd]); if(!q||q<=0) return; const cod=iCod>=0?String(l[iCod]||'').trim():'', nome=iNome>=0?String(l[iNome]||'').trim():'';
+      let p=(cod&&farmaAcharProduto(cod))||(nome&&(lista('farmaProdutos').find(x=>norm(x.nome)===norm(nome))||farmaMelhorProduto(nome,'')));
+      const it={produtoId:p?p.id:'', lote:iLote>=0?String(l[iLote]||'').trim().toUpperCase():'', validade:iVal>=0?impData(l[iVal]):'', qtd:q, valorUnit:iVal2>=0?numBR(l[iVal2])||'':''};
+      if(!p){ it._cod=cod; it._nome=nome.toUpperCase(); it._un=iUn>=0?String(l[iUn]||'').trim():''; faltam.push(it); } novos.push(it); });
+    if(faltam.length && pode('farmaProdutos') && confirm(faltam.length+' item(ns) não têm produto cadastrado (ex.: '+faltam.slice(0,3).map(x=>x._nome||x._cod).join(', ')+'). Cadastrar esses produtos agora?')){
+      const g=(lista('farmaGrupos').find(x=>x.nome==='MEDICAMENTOS')||lista('farmaGrupos')[0]||{}).id; const porNome=new Map();
+      const cria=faltam.filter(x=>x._nome).map(x=>{ const k=norm(x._nome); if(porNome.has(k)){ x.produtoId=porNome.get(k).id; return null; } const un=(lista('farmaUnidadesMedida').find(u=>norm(u.sigla)===norm(x._un)||norm(u.nome)===norm(x._un))||{}).id||farmaUnidadePorTexto(x._un+' '+x._nome);
+        const p={id:uid(), nome:x._nome, codigoSIS:x._cod, tipo:'MEDICAMENTO', unidadeMedidaId:un, grupoId:g, ativo:true}; porNome.set(k,p); x.produtoId=p.id; return p; }).filter(Boolean);
+      await salvarLote('farmaProdutos', cria); registrarAcao('Cadastrou '+cria.length+' produto(s) ao importar itens');
+    }
+    novos.forEach(x=>{ delete x._cod; delete x._nome; delete x._un; FDOC.itens.push(x); });
+    farmaDocRender(); showToast(novos.length+' item(ns) importado(s) de '+f.name+'.','success');
+  }catch(e){ console.error(e); showToast('Não foi possível ler: '+(e.message||e),'error'); }
+}
+
+/* ---------------- Dispensação ao paciente ---------------- */
+const FDISP_CAMPOS=[
+  {k:'data', r:'Data', t:'data', obr:true},{k:'receitaTipo', r:'Tipo de receita', t:'sel', op:FARMA_TIPOS_RECEITA, vazio:false},{k:'receitaNumero', r:'Nº da receita / notificação', on:'onchange="farmaDispBloco(this.value)"'},{k:'receitaData', r:'Data da receita', t:'data'},
+  {k:'prescritorId', r:'Prescritor (da rede)', t:'ref', tab:'profissionais', w:2},{k:'prescritorExterno', r:'ou prescritor de fora (nome e CRM)', w:2, maiusc:true},
+  {k:'retiranteNome', r:'Quem retirou (se não foi o paciente)', w:2, maiusc:true},{k:'retiranteDoc', r:'Documento de quem retirou'},{k:'cid', r:'CID', t:'cid'},
+  {k:'obs', r:'Observação', w:4},
+];
+let FDISP=null;
+async function farmaDispNova(preset){
+  preset=preset||{}; if(semClinico() || semPermissao('farmaDispensacao')) return;
+  const L=farmaLocalAtual(); if(!L){ showToast('Cadastre um local de estoque.','warning'); return; }
+  await farmaPreparar(L);
+  FDISP={localId:L, itens:[], receitaId:'', atendimentoId:'', altoCustoId:preset.altoCustoId||'', modal:null};
+  FDISP.modal=abrirModal({titulo:'🧾 Dispensação — '+esc(nomeDe('farmaLocais',L)), tamanho:'m-cheio', corpo:`
+    <div class="field mb"><label>Paciente <span class="obr">*</span></label>${pickerPacienteHTML('fdpPac', preset.pacienteId||'', {aoEscolher:'farmaDispPac'})}</div><div id="fdpInfo" class="mb"></div>
+    ${formHTML('fdp', FDISP_CAMPOS, {data:hojeISO(), receitaTipo:'SIMPLES'})}
+    <h3>Medicamentos e materiais</h3>
+    <div class="formgrid"><div class="field"><label>Código / código de barras</label><input class="inp" id="fdpCod" placeholder="Leia e tecle Enter" onkeydown="if(event.key==='Enter'){event.preventDefault();farmaDispCodigo(this.value);this.value='';}"></div><div class="field w3"><label>ou procure o produto</label>${pickerHTML('fdpProd','farmaProdutos','',{ph:'Nome ou código do produto', aoEscolher:'farmaDispAddProd'})}</div></div>
+    <div id="fdpItens" class="mt"></div><label class="check mt"><input type="checkbox" id="fdpImp" checked> Imprimir o comprovante (com a assinatura de quem retirou)</label>`,
+    botoes:[{r:'💾 Salvar dispensação', fn:'farmaDispSalvar()'}]});
+  if(preset.pacienteId) await farmaDispPac('fdpPac', obter('pacientes', preset.pacienteId));
+  if(preset.produtoId) farmaDispAddProd('', obter('farmaProdutos', preset.produtoId));
+  farmaDispRender();
+}
+function farmaReceitasPaciente(pid){
+  const lim=addDias(hojeISO(),-120); const usadas=new Set(lista('farmaDisp').filter(d=>d.status!=='cancelada' && d.receitaId).map(d=>d.receitaId)); const out=[];
+  lista('clinico').filter(c=>c.pacienteId===pid).forEach(c=>(c.receitas||[]).forEach(r=>{ if(String(r.data||c.data||'')>=lim) out.push(Object.assign({}, r, {atendimentoId:c.id, usada:usadas.has(r.id)})); }));
+  return out.sort((a,b)=>String(b.data).localeCompare(String(a.data)));
+}
+async function farmaDispPac(id, p){
+  if(!p||!FDISP) return; await garantirHistoricoPaciente(p);
+  const rec=farmaReceitasPaciente(p.id); const ult=ordenarPor(lista('farmaDisp').filter(d=>d.pacienteId===p.id && d.status!=='cancelada'), d=>d.data).reverse().slice(0,4);
+  const ac=lista('farmaAltoCusto').filter(a=>a.pacienteId===p.id && a.situacao==='DEFERIDO');
+  const el=document.getElementById('fdpInfo'); if(!el) return;
+  el.innerHTML=`${p.alergias?`<div class="alerta-erro">⚠ Alergias: ${esc(p.alergias)}</div>`:''}
+    ${rec.length?`<div class="helpbox"><b>Receitas do consultório (últimos 4 meses):</b>${rec.slice(0,6).map(r=>`<div class="flexrow" style="border-top:1px solid var(--line);padding:4px 0;"><span>${fmtData(r.data)} — ${esc(nomeDe('profissionais',r.profissionalId))} — <i>${esc(r.tipo||'')}</i>: ${(r.itens||[]).map(i=>esc(i.medicamento)).join('; ')}</span>${r.usada?'<span class="badge cinza">já dispensada</span>':`<button class="btn small" onclick="farmaDispUsarReceita('${r.id}')">📋 usar esta receita</button>`}</div>`).join('')}</div>`:''}
+    ${ult.length?`<div class="small muted">Últimas retiradas: ${ult.map(d=>fmtData(d.data)+': '+(d.itens||[]).map(i=>esc(prodNome(i.produtoId))+' × '+fmtNum(i.qtd)).join(', ')).join(' · ')}</div>`:''}
+    ${ac.length?`<div class="small">📂 Alto custo deferido: ${ac.map(a=>esc(a.medicamento)+' até '+fmtData(a.fimVigencia)).join(' · ')}</div>`:''}`;
+}
+function farmaProdutoDoMedicamento(nome){
+  const n=norm(nome); const med=lista('medicamentos').find(m=>norm(m.nome)===n); let p=med&&ativos('farmaProdutos').find(x=>x.medicamentoId===med.id); if(p) return p;
+  p=ativos('farmaProdutos').find(x=>norm(x.nome)===n); if(p) return p; return farmaMelhorProduto(nome,'');
+}
+function farmaDispUsarReceita(rid){
+  const pid=document.getElementById('fdpPac').value; const r=farmaReceitasPaciente(pid).find(x=>x.id===rid); if(!r) return;
+  FDISP.receitaId=r.id; FDISP.atendimentoId=r.atendimentoId;
+  const set=(k,v)=>{ const e=document.getElementById('fdp_'+k); if(e && v!==undefined) e.value=v; }; set('prescritorId', r.profissionalId||''); set('receitaData', r.data||''); set('receitaTipo', FARMA_TIPOS_RECEITA.includes(r.tipo)?r.tipo:'SIMPLES');
+  const s=farmaSaldos(FDISP.localId); const faltam=[];
+  (r.itens||[]).forEach(i=>{ const p=farmaProdutoDoMedicamento(i.medicamento); if(!p){ faltam.push(i.medicamento); return; } const q=numBR((String(i.quantidade||'').match(/[\d.,]+/)||[''])[0]); const l=farmaLotesDisp(s,p.id)[0];
+    FDISP.itens.push({produtoId:p.id, lote:l?l.lote:'', validade:l?l.v:'', qtd:q?Math.min(q, l?l.q:q):'', qtdPrescrita:q||'', posologia:i.posologia||'', dias:i.continuo?farmaCfg().diasPadraoTratamento:''}); });
+  farmaDispRender(); if(faltam.length) showToast('Sem produto na farmácia para: '+faltam.join(', '),'warning');
+}
+function farmaDispAddProd(id, p){ if(!p||!FDISP) return; const l=farmaLotesDisp(farmaSaldos(FDISP.localId), p.id)[0]; FDISP.itens.push({produtoId:p.id, lote:l?l.lote:'', validade:l?l.v:'', qtd:'', dias:p.usoContinuo?farmaCfg().diasPadraoTratamento:''}); pickerDefinir('fdpProd',''); farmaDispRender(); }
+function farmaDispCodigo(t){ const p=farmaAcharProduto(t); if(p) farmaDispAddProd('', p); else showToast('Código não encontrado: '+t,'warning'); }
+function farmaDispLote(i, l){ const it=FDISP.itens[i]; it.lote=l; const x=farmaSaldos(FDISP.localId)[farmaChave(it.produtoId,l)]; it.validade=x?x.v:''; farmaDispRender(); }
+function farmaDispBloco(num){ const n=Number(soDigitos(num)); if(!n) return; const b=ativos('farmaBlocos').find(x=>n>=Number(soDigitos(x.serieInicial)) && n<=Number(soDigitos(x.serieFinal))); if(b){ const e=document.getElementById('fdp_prescritorId'); if(e){ e.value=b.profissionalId; showToast('Receita do bloco de '+nomeDe('profissionais',b.profissionalId)+'.','success'); } } }
+function farmaDispRender(){
+  const el=document.getElementById('fdpItens'); if(!el||!FDISP) return; const s=farmaSaldos(FDISP.localId); const dt=(document.getElementById('fdp_data')||{}).value||hojeISO();
+  el.innerHTML = FDISP.itens.length ? `<div class="table-wrap" style="max-height:380px;"><table class="lab-res"><thead><tr><th>Produto</th><th>Lote / validade</th><th>Disponível</th><th>Qtd</th><th>Prescrita</th><th>Posologia</th><th>Dias</th><th></th></tr></thead><tbody>${FDISP.itens.map((it,i)=>{
+    const lotes=farmaLotesDisp(s,it.produtoId); const ctrl=prodControlado(it.produtoId); const disp=(s[farmaChave(it.produtoId,it.lote)]||{q:0}).q;
+    return `<tr><td><b>${esc(prodNome(it.produtoId))}</b> <span class="muted small">${esc(prodUn(it.produtoId))}</span>${ctrl?` <span class="badge ruim" title="${esc(ctrl.receita||'')}">${esc(ctrl.nome)}</span>`:''}</td>
+      <td><select class="inp" onchange="farmaDispLote(${i},this.value)">${lotes.map(l=>`<option value="${esc(l.lote)}" ${l.lote===it.lote?'selected':''}>${esc(l.lote||'sem lote')} — ${l.v?fmtData(l.v):'s/ validade'} (${fmtNum(l.q)})</option>`).join('')}${!lotes.some(l=>l.lote===it.lote)?`<option value="${esc(it.lote||'')}" selected>${esc(it.lote||'sem lote')} (sem saldo)</option>`:''}</select> ${farmaValidadeBadge(it.validade)}</td>
+      <td class="num ${disp<(Number(it.qtd)||0)?'vital-alerta':''}">${fmtNum(disp)}</td>
+      <td><input class="inp" style="width:80px;" inputmode="decimal" value="${it.qtd??''}" onchange="FDISP.itens[${i}].qtd=numBR(this.value);farmaDispRender()"></td>
+      <td><input class="inp" style="width:70px;" value="${it.qtdPrescrita??''}" onchange="FDISP.itens[${i}].qtdPrescrita=numBR(this.value)"></td>
+      <td><input class="inp" value="${esc(it.posologia||'')}" onchange="FDISP.itens[${i}].posologia=this.value"></td>
+      <td><input class="inp" style="width:60px;" value="${it.dias??''}" onchange="FDISP.itens[${i}].dias=numBR(this.value);farmaDispRender()">${Number(it.dias)?`<div class="small muted">volta ${fmtData(addDias(dt,Number(it.dias)))}</div>`:''}</td>
+      <td><button class="btn ghost small" onclick="FDISP.itens.splice(${i},1);farmaDispRender()">🗑</button></td></tr>`; }).join('')}</tbody></table></div>` : '<div class="muted small">Leia o código de barras, procure o produto ou use uma receita do consultório (aparece depois de escolher o paciente).</div>';
+}
+/* grava a dispensação (clínica) e a "sombra" sem o paciente que tira do estoque */
+async function farmaGravarDisp(d){
+  const numero=await farmaNumero('fardsp', d.data);
+  const rec=salvar('farmaDisp', Object.assign({}, d, {numero, hora:d.hora||horaAgora(), status:'ativa', itens:d.itens.map(i=>({produtoId:i.produtoId, lote:i.lote||'', validade:i.validade||'', qtd:Number(i.qtd), qtdPrescrita:i.qtdPrescrita||'', posologia:i.posologia||'', dias:Number(i.dias)||'', proxima:Number(i.dias)?addDias(d.data, Number(i.dias)):''}))}));
+  await farmaSalvarDoc({id:'dsp_'+rec.id, tipo:'dispensacao', numero, data:rec.data, hora:rec.hora, localId:rec.localId, dispId:rec.id, itens:rec.itens.map(i=>({produtoId:i.produtoId, lote:i.lote, validade:i.validade, qtd:i.qtd})), status:'ativo'}, null);
+  farmaMarcarMesPaciente(rec.pacienteId, rec.data);
+  if(rec.altoCustoId){ const ac=obter('farmaAltoCusto', rec.altoCustoId); if(ac) salvar('farmaAltoCusto', Object.assign({}, ac, {retiradas:(ac.retiradas||[]).concat([{data:rec.data, dispId:rec.id, numero, qtd:rec.itens.reduce((s,i)=>s+i.qtd,0), por:usuarioCurto()}])})); }
+  return rec;
+}
+async function farmaDispSalvar(){
+  const pid=document.getElementById('fdpPac').value; if(!pid){ showToast('Escolha o paciente.','warning'); return; }
+  const {d, erros}=formLer('fdp', FDISP_CAMPOS); if(mostrarErros(erros)) return;
+  if(d.data>hojeISO()){ showToast('A data não pode ser futura.','warning'); return; }
+  const itens=FDISP.itens.filter(i=>i.produtoId && Number(i.qtd)>0); if(!itens.length){ showToast('Informe a quantidade dos itens.','warning'); return; }
+  const probs=[]; farmaChecarSaldo(FDISP.localId, itens, probs, true);
+  const ctrl=itens.map(i=>prodControlado(i.produtoId)).filter(Boolean);
+  if(ctrl.length){ if(!d.receitaNumero) probs.push('Controlado: informe o nº da receita/notificação'); if(!d.prescritorId && !d.prescritorExterno) probs.push('Controlado: informe o prescritor'); if(farmaCfg().exigirRetiranteControlado && (!d.retiranteNome || !d.retiranteDoc)) probs.push('Controlado: informe nome e documento de quem retirou'); }
+  if(d.receitaData && (ctrl.length || d.receitaTipo==='ANTIMICROBIANO')){ const val=d.receitaTipo==='ANTIMICROBIANO'?10:Math.min(...ctrl.map(l=>Number(l.validadeReceitaDias)||30)); if(diffDias(d.receitaData, d.data)>val) probs.push('Receita vencida: '+(d.receitaTipo==='ANTIMICROBIANO'?'antimicrobiano':'controlado')+' vale '+val+' dias'); }
+  if(probs.length){ showToast(probs.slice(0,3).join(' · ')+(probs.length>3?' …':''),'warning'); return; }
+  const rec=await farmaGravarDisp(Object.assign(d, {localId:FDISP.localId, pacienteId:pid, receitaId:FDISP.receitaId, atendimentoId:FDISP.atendimentoId, altoCustoId:FDISP.altoCustoId, itens}));
+  registrarAcao('Dispensou '+itens.length+' item(ns) a '+nomeDe('pacientes',pid)+' (nº '+rec.numero+')');
+  const imp=document.getElementById('fdpImp').checked; fecharModal(FDISP.modal); FDISP=null; showToast('Dispensação '+rec.numero+' registrada.','success'); if(imp) farmaImprimirDisp(rec.id);
+}
+async function farmaDispCancelar(id){
+  const r=obter('farmaDisp',id); if(!r||r.status==='cancelada'||semPermissao('farmaDispensacao')) return;
+  const mot=prompt('Motivo do cancelamento (os produtos voltam para o estoque):',''); if(!mot) return;
+  await garantirMeses('farmaDocs',[mesDe(r.data)]); salvar('farmaDisp', Object.assign({}, r, {status:'cancelada', canceladoEm:agoraLocal(), canceladoPor:usuarioCurto(), motivoCancelamento:mot}));
+  const sh=obter('farmaDocs','dsp_'+id); if(sh) await farmaSalvarDoc(Object.assign({}, sh, {status:'cancelado'}), sh);
+  registrarAcao('Cancelou a dispensação nº '+r.numero+': '+mot); while(MODAIS.length) fecharModalTopo(); showToast('Dispensação cancelada — estoque devolvido.','success'); render(true);
+}
+function farmaDispVer(id){
+  const r=obter('farmaDisp',id); if(!r) return; const p=obter('pacientes',r.pacienteId)||{};
+  abrirModal({titulo:'🧾 Dispensação nº '+esc(r.numero)+(r.status==='cancelada'?' — CANCELADA':''), tamanho:'m-grande', corpo:`${r.status==='cancelada'?`<div class="alerta-erro">Cancelada em ${esc(fmtDataHora(r.canceladoEm))}: ${esc(r.motivoCancelamento||'')}</div>`:''}${pacCabHTML(p)}
+    <div class="kv mb"><div><span class="k">Data</span><span class="v">${fmtData(r.data)} ${esc(r.hora||'')}</span></div><div><span class="k">Local</span><span class="v">${esc(nomeDe('farmaLocais',r.localId))}</span></div><div><span class="k">Receita</span><span class="v">${esc(r.receitaTipo||'')} ${esc(r.receitaNumero||'')} ${r.receitaData?'de '+fmtData(r.receitaData):''}</span></div><div><span class="k">Prescritor</span><span class="v">${esc(nomeDe('profissionais',r.prescritorId)||r.prescritorExterno||'—')}</span></div><div><span class="k">Retirado por</span><span class="v">${esc(r.retiranteNome||'o próprio paciente')} ${esc(r.retiranteDoc||'')}</span></div><div><span class="k">Atendente</span><span class="v">${esc(r.criadoPor||'')}</span></div></div>
+    ${tabelaHTML(['Produto','Lote','Validade','Qtd','Posologia','Próxima retirada'], (r.itens||[]).map(i=>[prodNome(i.produtoId)+' ('+prodUn(i.produtoId)+')', i.lote, fmtData(i.validade), fmtNum(i.qtd), i.posologia||'', fmtData(i.proxima)]))}`,
+    botoesEsq:[{r:'🖨️ Comprovante', fn:`farmaImprimirDisp('${r.id}')`}].concat(r.status!=='cancelada'&&pode('farmaDispensacao')?[{r:'Cancelar e devolver ao estoque', cls:'danger', fn:`farmaDispCancelar('${r.id}')`}]:[])});
+}
+function farmaImprimirDisp(id){
+  const r=obter('farmaDisp',id); if(!r) return; const p=obter('pacientes',r.pacienteId)||{}; const loc=obter('farmaLocais',r.localId)||{};
+  imprimirHTML(docCabecalho('Comprovante de Dispensação de Medicamentos', 'Nº <b>'+esc(r.numero)+'</b>', loc.unidadeId)+
+    `<div class="doc-box"><div class="doc-grid"><div style="grid-column:span 2;"><span>Paciente</span><b>${esc(p.nome||'')}</b></div><div><span>CNS</span>${esc(fmtCNS(p.cns)||'—')}</div><div><span>Data</span>${fmtData(r.data)} ${esc(r.hora||'')}</div>
+      <div style="grid-column:span 2;"><span>Prescritor</span>${esc(nomeDe('profissionais',r.prescritorId)||r.prescritorExterno||'—')}</div><div><span>Receita</span>${esc(r.receitaTipo||'')} ${esc(r.receitaNumero||'')}</div><div><span>Local</span>${esc(loc.nome||'')}</div></div></div>
+    ${tabelaHTML(['Produto','Un.','Lote','Validade','Qtd','Como usar','Próxima retirada'], (r.itens||[]).map(i=>[prodNome(i.produtoId), prodUn(i.produtoId), i.lote||'', fmtData(i.validade), fmtNum(i.qtd), i.posologia||'', fmtData(i.proxima)]))}
+    <div class="small mt">Guarde os medicamentos em local fresco, seco e longe do alcance das crianças. Traga a receita na próxima retirada.</div>
+    <div class="linha-ass"><div>Retirado por: ${esc(r.retiranteNome||p.nome||'')}${r.retiranteDoc?'<br>Doc.: '+esc(r.retiranteDoc):''}</div><div>Atendente: ${esc(r.criadoPor||usuarioCurto())}</div></div>`);
+}
+const FDSF={ini:hojeISO(), fim:hojeISO(), busca:''};
+VIEWS.farmaDispensacao=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">A dispensação mostra quem recebeu cada medicamento (dado clínico) — seu perfil não tem acesso.</div>';
+  const L=farmaLocalAtual(); if(L && !farmaPronto(L)) return farmaLocalSel()+farmaCalculando();
+  exigirPeriodo(['farmaDisp'], FDSF.ini, FDSF.fim);
+  let l=lista('farmaDisp').filter(d=>d.localId===L && d.data>=FDSF.ini && d.data<=FDSF.fim);
+  if(FDSF.busca){ const t=norm(FDSF.busca); l=l.filter(d=>norm(nomeDe('pacientes',d.pacienteId)+' '+d.numero+' '+(d.itens||[]).map(i=>prodNome(i.produtoId)).join(' ')).includes(t)); }
+  l.sort((a,b)=>String(b.data+(b.hora||'')).localeCompare(String(a.data+(a.hora||''))));
+  return `${farmaLocalSel()}<div class="card"><div class="flexrow mb"><div class="actions">De <input type="date" class="inp" style="width:auto;" value="${FDSF.ini}" onchange="FDSF.ini=this.value;render()"> a <input type="date" class="inp" style="width:auto;" value="${FDSF.fim}" onchange="FDSF.fim=this.value;render()"><input class="inp" style="max-width:260px;" placeholder="🔎 paciente, nº ou produto" value="${esc(FDSF.busca)}" oninput="FDSF.busca=this.value;debRender()"><span class="muted small">${l.length} dispensação(ões)</span></div>
+    ${pode('farmaDispensacao')&&L?`<button class="btn big" onclick="farmaDispNova()">+ Nova dispensação</button>`:''}</div>
+  ${tabelaHTML(['Nº','Data','Paciente','Itens','Receita','Situação',''], l.slice(0,400).map(d=>{ const p=obter('pacientes',d.pacienteId)||{}; return [`<b>${esc(d.numero)}</b>`, fmtData(d.data)+' '+esc(d.hora||''), `<b>${esc(p.nome||'')}</b><div class="small muted">${esc(idadeTexto(p.nascimento))}</div>`, `<span class="small">${(d.itens||[]).map(i=>esc(prodNome(i.produtoId))+' × '+fmtNum(i.qtd)).join('<br>')}</span>`, `<span class="small">${esc(d.receitaTipo||'')} ${esc(d.receitaNumero||'')}<div class="muted">${esc(nomeDe('profissionais',d.prescritorId)||d.prescritorExterno||'')}</div></span>`, d.status==='cancelada'?'<span class="badge cinza">cancelada</span>':'<span class="badge ok">entregue</span>', `<button class="btn ghost small" onclick="farmaDispVer('${d.id}')">👁</button><button class="btn ghost small" onclick="farmaImprimirDisp('${d.id}')">🖨️</button>`]; }), {html:true})}</div>`;
+};
+
+/* ---------------- Uso contínuo: próximas retiradas ---------------- */
+let FUC='atrasados';
+function farmaProximasRetiradas(){
+  const ult=new Map();
+  lista('farmaDisp').filter(d=>d.status!=='cancelada').forEach(d=>(d.itens||[]).forEach(i=>{ const k=d.pacienteId+'|'+i.produtoId; const x=ult.get(k); if(!x || d.data>x.d.data) ult.set(k, {d, i}); }));
+  return [...ult.values()].filter(x=>x.i.proxima).map(x=>({pacienteId:x.d.pacienteId, produtoId:x.i.produtoId, ultima:x.d.data, proxima:x.i.proxima, localId:x.d.localId, atraso:diffDias(x.i.proxima, hojeISO())}));
+}
+VIEWS.farmaUsoContinuo=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">Seu perfil não tem acesso a dados clínicos.</div>';
+  const H=hojeISO(); let l=farmaProximasRetiradas();
+  if(FUC==='atrasados') l=l.filter(x=>x.atraso>0); else if(FUC==='semana') l=l.filter(x=>x.atraso<=0 && x.atraso>=-7);
+  l.sort((a,b)=>String(a.proxima).localeCompare(String(b.proxima)));
+  return `<div class="helpbox">Quem tem medicamento de uso contínuo e não voltou para retirar (data = última retirada + dias de tratamento informados na dispensação). Mostra as retiradas dos últimos 3 meses.</div>
+  <div class="card"><div class="flexrow mb"><div class="tabs" style="margin:0;">${[['atrasados','⏰ Atrasados'],['semana','📅 Próximos 7 dias'],['todos','Todos']].map(([k,r])=>`<div class="tab ${FUC===k?'active':''}" onclick="FUC='${k}';render()">${r}</div>`).join('')}</div><button class="btn secondary" onclick="imprimirTabela('Próximas retiradas de medicamentos','${FUC}', ['Paciente','Telefone','Produto','Última','Próxima','Dias'], farmaProximasRetiradasLinhas())">🖨️ Imprimir</button></div>
+  ${tabelaHTML(['Paciente','Telefone','Produto','Última retirada','Próxima','Situação',''], l.slice(0,500).map(x=>{ const p=obter('pacientes',x.pacienteId)||{}; return [`<b>${esc(p.nome||'')}</b>`, esc(fmtTel(p.celular||p.telefone)), esc(prodNome(x.produtoId)), fmtData(x.ultima), fmtData(x.proxima), x.atraso>0?`<span class="badge ruim">${x.atraso} dia(s) de atraso</span>`:x.atraso===0?'<span class="badge ambar">hoje</span>':`<span class="badge azul">em ${-x.atraso} dia(s)</span>`,
+    `${pode('farmaDispensacao')?`<button class="btn small" onclick="farmaDispNova({pacienteId:'${x.pacienteId}', produtoId:'${x.produtoId}'})">🧾 dispensar</button>`:''}${p.celular?`<button class="btn ghost small" onclick="farmaAvisarRetirada('${x.pacienteId}','${x.produtoId}')">💬</button>`:''}`]; }), {html:true})}</div>`;
+};
+function farmaProximasRetiradasLinhas(){ return farmaProximasRetiradas().filter(x=>FUC==='todos'||(FUC==='atrasados'?x.atraso>0:x.atraso<=0&&x.atraso>=-7)).map(x=>{ const p=obter('pacientes',x.pacienteId)||{}; return [p.nome||'', fmtTel(p.celular||p.telefone), prodNome(x.produtoId), fmtData(x.ultima), fmtData(x.proxima), x.atraso]; }); }
+function farmaAvisarRetirada(pid, prodId){ const p=obter('pacientes',pid)||{}; const tel=soDigitos(p.celular); if(tel.length<10){ showToast('Paciente sem celular.','warning'); return; }
+  window.open('https://wa.me/55'+tel+'?text='+encodeURIComponent(`Olá, ${primeiroNome(p.nome)}! ${entidadeFantasia()} lembra: está na hora de retirar o seu medicamento (${prodNome(prodId)}) na farmácia. Traga a receita e um documento.`),'_blank'); registrarAcao('Avisou '+(p.nome||'')+' da retirada de medicamento por WhatsApp'); }
+
+/* ---------------- Alto custo ---------------- */
+const FAC_CAMPOS=[{k:'processo', r:'Nº do processo / LME'},{k:'tipo', r:'Tipo', t:'sel', op:['SOLICITAÇÃO INICIAL','RENOVAÇÃO','ADEQUAÇÃO'], vazio:false},{k:'situacao', r:'Situação', t:'sel', op:['EM ANÁLISE','DEFERIDO','INDEFERIDO','ENCERRADO'], vazio:false},{k:'dataSolicitacao', r:'Data da solicitação', t:'data', padrao:()=>hojeISO()},
+  {k:'medicamento', r:'Medicamento(s)', w:2, maiusc:true, obr:true},{k:'produtoId', r:'Produto no estoque (se a farmácia entrega)', t:'ref', tab:'farmaProdutos', w:2},{k:'cid', r:'CID', t:'cid'},{k:'prescritorId', r:'Médico', t:'ref', tab:'profissionais'},{k:'inicioVigencia', r:'Início da vigência', t:'data'},{k:'fimVigencia', r:'Fim da vigência', t:'data'},{k:'obs', r:'Observações', t:'area', w:4, linhas:2}];
+VIEWS.farmaAltoCusto=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">Seu perfil não tem acesso a dados clínicos.</div>';
+  const H=hojeISO(), lim=addDias(H,30); const l=ordenarPor(lista('farmaAltoCusto'), a=>a.fimVigencia||'9999');
+  return `<div class="helpbox">Como o Alto Custo do SIS: cada processo do componente especializado (LME), com a vigência e as retiradas. Ao fim da vigência, altere o processo para <b>RENOVAÇÃO</b> e a nova vigência.</div>
+  <div class="card"><div class="flexrow mb"><span class="muted small">${l.length} processo(s) · ${l.filter(a=>a.situacao==='DEFERIDO'&&a.fimVigencia&&a.fimVigencia<=lim).length} vencendo em 30 dias</span>${pode('farmaAltoCusto')?`<button class="btn" onclick="farmaACAbrir()">+ Novo processo</button>`:''}</div>
+  ${tabelaHTML(['Paciente','Medicamento','Processo','Situação','Vigência','Retiradas',''], l.map(a=>{ const p=obter('pacientes',a.pacienteId)||{}; const venc=a.fimVigencia&&a.fimVigencia<H, perto=!venc&&a.fimVigencia&&a.fimVigencia<=lim; return [`<b>${esc(p.nome||'')}</b>`, esc(a.medicamento||''), esc((a.processo||'')+' '+(a.tipo?'('+a.tipo.toLowerCase()+')':'')), `<span class="badge ${a.situacao==='DEFERIDO'?'ok':a.situacao==='INDEFERIDO'?'ruim':a.situacao==='ENCERRADO'?'cinza':'ambar'}">${esc(a.situacao||'')}</span>`, `${fmtData(a.inicioVigencia)} a <span class="${venc?'vital-alerta':''}">${fmtData(a.fimVigencia)}</span>${venc?' <span class="badge ruim">vencida</span>':perto?' <span class="badge ambar">renovar</span>':''}`, (a.retiradas||[]).length,
+    `<button class="btn ghost small" onclick="farmaACAbrir('${a.id}')">✏️</button>${a.produtoId&&a.situacao==='DEFERIDO'&&pode('farmaDispensacao')?`<button class="btn small" onclick="farmaDispNova({pacienteId:'${a.pacienteId}', produtoId:'${a.produtoId}', altoCustoId:'${a.id}'})">🧾 dispensar</button>`:''}`]; }), {html:true})}</div>`;
+};
+function farmaACAbrir(id){
+  const a=id?obter('farmaAltoCusto',id):null; const ed=pode('farmaAltoCusto');
+  abrirModal({titulo:'📂 Processo de alto custo', tamanho:'m-grande', corpo:`<div class="field mb"><label>Paciente <span class="obr">*</span></label>${pickerPacienteHTML('facPac', a?a.pacienteId:'', {semNovo:true})}</div>${formHTML('fac', FAC_CAMPOS, a||{})}
+    ${a&&(a.retiradas||[]).length?`<h3>Retiradas</h3>${tabelaHTML(['Data','Dispensação','Qtd','Por'], a.retiradas.map(r=>[fmtData(r.data), r.numero||'', fmtNum(r.qtd), r.por||'']))}`:''}`,
+    botoes: ed?[{r:'💾 Salvar', fn:`farmaACSalvar('${id||''}')`}]:[]});
+}
+function farmaACSalvar(id){
+  const pid=document.getElementById('facPac').value; if(!pid){ showToast('Escolha o paciente.','warning'); return; }
+  const {d, erros}=formLer('fac', FAC_CAMPOS); if(mostrarErros(erros)) return;
+  const r=salvar('farmaAltoCusto', Object.assign({}, id?obter('farmaAltoCusto',id):{retiradas:[]}, d, {pacienteId:pid}, id?{id}:{}));
+  registrarAcao((id?'Alterou':'Cadastrou')+' processo de alto custo de '+nomeDe('pacientes',pid)); fecharModalTopo(); showToast('Processo salvo.','success');
+}
+
+/* ---------------- Posição do estoque ---------------- */
+const FEF={busca:'', grupo:'', sit:'', lotes:false};
+VIEWS.farmaEstoque=()=>{
+  const L=farmaLocalAtual(); if(!L) return farmaLocalSel(); if(!farmaPronto(L)) return farmaLocalSel()+farmaCalculando();
+  const cfg=farmaCfg(); const pp=farmaPorProduto(farmaSaldos(L)); const H=hojeISO(), lim=addDias(H, cfg.diasAlertaValidade);
+  let prods=ativos('farmaProdutos').filter(p=>pp[p.id] || Number(p.estoqueMinimo)>0);
+  if(FEF.grupo) prods=prods.filter(p=>p.grupoId===FEF.grupo);
+  if(FEF.busca){ const t=norm(FEF.busca); prods=prods.filter(p=>norm(rotuloDe('farmaProdutos',p)+' '+(p.codigoBarras||'')).includes(t)); }
+  const sitDe=p=>{ const x=pp[p.id]||{q:0,lotes:[]}; const s=[]; if(x.q<=0) s.push('zerado'); else if(Number(p.estoqueMinimo)>0 && x.q<Number(p.estoqueMinimo)) s.push('minimo'); if(x.lotes.some(l=>l.q>0&&l.v&&l.v<H)) s.push('vencido'); else if(x.lotes.some(l=>l.q>0&&l.v&&l.v<=lim)) s.push('vencendo'); if(x.q<0||x.lotes.some(l=>l.q<0)) s.push('negativo'); return s; };
+  if(FEF.sit) prods=prods.filter(p=>sitDe(p).includes(FEF.sit));
+  prods=ordenarTexto(prods, p=>p.nome);
+  const valor=prods.reduce((t,p)=>t+Math.max(0,(pp[p.id]||{q:0}).q)*(Number(p.precoReferencia)||0),0);
+  const b={zerado:'<span class="badge cinza">zerado</span>', minimo:'<span class="badge ambar">abaixo do mínimo</span>', vencido:'<span class="badge ruim">lote vencido</span>', vencendo:'<span class="badge ambar">vencendo</span>', negativo:'<span class="badge ruim">negativo</span>'};
+  return `${farmaLocalSel()}<div class="card"><div class="flexrow mb"><div class="actions"><input class="inp" style="max-width:240px;" placeholder="🔎 produto, código ou barras" value="${esc(FEF.busca)}" oninput="FEF.busca=this.value;debRender()">
+    <select class="inp" style="width:auto;" onchange="FEF.grupo=this.value;render()"><option value="">Todos os grupos</option>${opcoesRef('farmaGrupos','').map(g=>`<option value="${g.id}" ${g.id===FEF.grupo?'selected':''}>${esc(g.nome)}</option>`).join('')}</select>
+    <select class="inp" style="width:auto;" onchange="FEF.sit=this.value;render()">${[['','Todas as situações'],['minimo','Abaixo do mínimo'],['zerado','Zerados'],['vencendo','Lote vencendo'],['vencido','Lote vencido'],['negativo','Negativos']].map(o=>`<option value="${o[0]}" ${o[0]===FEF.sit?'selected':''}>${o[1]}</option>`).join('')}</select>
+    <label class="check small"><input type="checkbox" ${FEF.lotes?'checked':''} onchange="FEF.lotes=this.checked;render()"> mostrar lotes</label><span class="muted small">${prods.length} produto(s) · valor ${fmtMoeda(valor)}</span></div>
+    <div class="actions"><button class="btn secondary" onclick="farmaImprimirPosicao()">🖨️ Imprimir</button></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Código</th><th>Produto</th><th>Un.</th><th class="num">Saldo</th><th class="num">Mínimo</th><th>Situação</th><th>${FEF.lotes?'Lotes':'Validade mais próxima'}</th><th></th></tr></thead><tbody>
+  ${prods.map(p=>{ const x=pp[p.id]||{q:0,lotes:[]}; const lt=x.lotes.filter(l=>l.q!==0); return `<tr><td>${esc(p.codigo||p.codigoSIS||'')}</td><td><b>${esc(p.nome)}</b>${p.listaId?` <span class="badge ruim">${esc(nomeDe('farmaListas',p.listaId).split(' ')[0])}</span>`:''}</td><td>${esc(prodUn(p.id))}</td><td class="num"><b>${fmtNum(x.q)}</b></td><td class="num">${p.estoqueMinimo?fmtNum(p.estoqueMinimo):''}</td><td>${sitDe(p).map(s=>b[s]).join(' ')}</td>
+    <td class="small">${FEF.lotes?lt.map(l=>`${esc(l.lote||'sem lote')} — ${l.v?fmtData(l.v):'s/ val.'}: <b>${fmtNum(l.q)}</b> ${farmaValidadeBadge(l.v)}`).join('<br>'):(lt[0]?fmtData(lt[0].v)+' '+farmaValidadeBadge(lt[0].v):'')}</td>
+    <td class="acoes"><button class="btn ghost small" title="Ficha de movimentação" onclick="farmaFicha('${p.id}')">📜</button><button class="btn ghost small" title="Estoque nos outros locais" onclick="farmaDistribuido('${p.id}')">🌐</button><button class="btn ghost small" title="Etiquetas" onclick="farmaEtiquetas('${p.id}')">🏷️</button></td></tr>`; }).join('')||'<tr class="empty-row"><td colspan="8">Nenhum produto com estoque neste local. Lance uma entrada (ou o estoque inicial).</td></tr>'}
+  </tbody></table></div></div>`;
+};
+function farmaImprimirPosicao(){ const L=farmaLocalAtual(); const pp=farmaPorProduto(farmaSaldos(L)); const ps=ordenarTexto(ativos('farmaProdutos').filter(p=>pp[p.id]&&pp[p.id].q!==0), p=>nomeDe('farmaGrupos',p.grupoId)+p.nome);
+  imprimirTabela('Posição do Estoque', esc(nomeDe('farmaLocais',L))+' — '+fmtDataHora(agoraLocal()), ['Código','Produto','Un.','Grupo','Lotes (validade: saldo)','Saldo','Valor'], ps.map(p=>{ const x=pp[p.id]; return [p.codigo||p.codigoSIS||'', p.nome, prodUn(p.id), nomeDe('farmaGrupos',p.grupoId), x.lotes.map(l=>(l.lote||'s/l')+' ('+(l.v?fmtData(l.v):'-')+'): '+fmtNum(l.q)).join('; '), fmtNum(x.q), fmtMoeda(Math.max(0,x.q)*(Number(p.precoReferencia)||0))]; }), {orientacao:'paisagem', num:[5,6]}); }
+async function farmaDistribuido(pid){
+  const ls=farmaLocais(); carregandoMsg(true,'Lendo o estoque de todos os locais…'); try{ for(const l of ls) if(!farmaPronto(l.id)) await farmaGarantirBase(l.id); } finally{ carregandoMsg(false); }
+  const linhas=ls.map(l=>{ const x=farmaPorProduto(farmaSaldos(l.id))[pid]||{q:0,lotes:[]}; return [l.nome, fmtNum(x.q), x.lotes.map(t=>(t.lote||'s/l')+' ('+(t.v?fmtData(t.v):'-')+'): '+fmtNum(t.q)).join('; ')]; });
+  abrirModal({titulo:'🌐 '+esc(prodNome(pid))+' — estoque em todos os locais', tamanho:'m-grande', corpo:tabelaHTML(['Local','Saldo','Lotes'], linhas, {num:[1]})});
+}
+/* Ficha de movimentação (kardex) */
+async function farmaKardex(locais, pid, ini, fim){
+  let saldoIni=0; for(const L of locais){ const s=await farmaSaldosEm(L, addDias(ini,-1)); Object.keys(s).forEach(k=>{ if(k.split('|')[0]===pid) saldoIni+=s[k].q; }); }
+  await garantirPeriodo(['farmaDocs'].concat(podeClinico()?['farmaDisp']:[]), ini, fim);
+  const docs=lista('farmaDocs').filter(d=>d.data>=ini && d.data<=fim && d.status!=='cancelado').sort((a,b)=>String(a.data+(a.hora||'')).localeCompare(String(b.data+(b.hora||''))));
+  let saldo=Math.round(saldoIni*1000)/1000; const linhas=[];
+  docs.forEach(d=>{ farmaDeltas(d).forEach(([loc,k,q])=>{ if(!locais.includes(loc) || k.split('|')[0]!==pid) return; if(d.tipo==='transferencia' && locais.includes(d.localId) && locais.includes(d.destinoId)) return; saldo=Math.round((saldo+q)*1000)/1000; linhas.push({data:d.data, doc:d, hist:farmaDocHistorico(d, podeClinico()), lote:farmaLoteDaChave(k), ent:q>0?q:0, sai:q<0?-q:0, saldo}); }); });
+  return {saldoIni:Math.round(saldoIni*1000)/1000, linhas, saldo};
+}
+async function farmaFicha(pid, ini, fim){
+  ini=ini||primeiroDiaMes(mesDe(hojeISO())); fim=fim||hojeISO(); const L=farmaLocalAtual();
+  carregandoMsg(true,'Montando a ficha de movimentação…'); let k; try{ k=await farmaKardex([L], pid, ini, fim); } finally{ carregandoMsg(false); }
+  if(document.getElementById('ffIni')) fecharModalTopo();
+  abrirModal({titulo:'📜 Ficha de movimentação — '+esc(prodNome(pid)), tamanho:'m-cheio', corpo:`<div class="actions mb">${esc(nomeDe('farmaLocais',L))} · De <input type="date" id="ffIni" class="inp" style="width:auto;" value="${ini}"> a <input type="date" id="ffFim" class="inp" style="width:auto;" value="${fim}"><button class="btn secondary small" onclick="farmaFicha('${pid}',document.getElementById('ffIni').value,document.getElementById('ffFim').value)">Atualizar</button></div>
+    ${tabelaHTML(['Data','Histórico','Lote','Entrada','Saída','Saldo'], [['', 'SALDO ANTERIOR','','','',fmtNum(k.saldoIni)]].concat(k.linhas.map(x=>[fmtData(x.data), x.hist, x.lote, x.ent?fmtNum(x.ent):'', x.sai?fmtNum(x.sai):'', fmtNum(x.saldo)])), {num:[3,4,5], rodape:['','Saldo final','', fmtNum(k.linhas.reduce((t,x)=>t+x.ent,0)), fmtNum(k.linhas.reduce((t,x)=>t+x.sai,0)), fmtNum(k.saldo)]})}`});
+}
+function farmaEtiquetas(pid){
+  const p=obter('farmaProdutos',pid)||{}; const cod=soDigitos(p.codigo||p.codigoSIS||''); if(!cod){ showToast('O produto precisa de um código numérico.','warning'); return; }
+  const n=Number(prompt('Quantas etiquetas?','12'))||0; if(n<=0) return; const lot=(farmaLotesDisp(farmaSaldos(farmaLocalAtual()), pid)[0]||{});
+  imprimirHTML(`<div class="etq-folha">${Array.from({length:Math.min(n,300)},()=>`<div class="etq"><div class="etq-n">${esc(p.nome||'')}</div><div>${esc(prodUn(pid))}${lot.lote?' · Lote '+esc(lot.lote)+(lot.v?' · Val. '+fmtData(lot.v):''):''}</div>${code39SVG(cod)}<div class="etq-c">${esc(cod)}</div></div>`).join('')}</div>`, null, {pagina:'A4', margem:'8mm', semRodape:true});
+}
+
+/* ---------------- Pedidos de compra ---------------- */
+function farmaPedidoSituacao(p){ if(p.status==='cancelado') return ['Cancelado','cinza']; const its=p.itens||[]; const rec=its.filter(i=>(Number(i.recebido)||0)>=(Number(i.qtd)||0)).length; const alg=its.some(i=>Number(i.recebido)>0); return rec===its.length&&its.length?['Atendido','ok']:alg?['Parcial','ambar']:['Aberto','azul']; }
+VIEWS.farmaPedidos=()=>{
+  const l=ordenarPor(lista('farmaPedidos'), p=>p.data).reverse();
+  return `${farmaLocalSel()}<div class="card"><div class="flexrow mb"><span class="muted small">${l.length} pedido(s)</span>${pode('farmaPedidos')?`<button class="btn" onclick="farmaPedAbrir()">+ Novo pedido</button>`:''}</div>
+  ${tabelaHTML(['Nº','Data','Fornecedor','Para','Itens','Valor','Situação',''], l.slice(0,300).map(p=>{ const s=farmaPedidoSituacao(p); return [`<b>${esc(p.numero)}</b>`, fmtData(p.data), esc(nomeDe('farmaFornecedores',p.fornecedorId)), esc(nomeDe('farmaLocais',p.localId)), (p.itens||[]).length, fmtMoeda((p.itens||[]).reduce((t,i)=>t+(Number(i.qtd)||0)*(Number(i.valorUnit)||0),0)), `<span class="badge ${s[1]}">${s[0]}</span>`, `<button class="btn ghost small" onclick="farmaPedAbrir('${p.id}')">✏️</button><button class="btn ghost small" onclick="farmaImprimirPedido('${p.id}')">🖨️</button>`]; }), {html:true})}</div>`;
+};
+let FPED=null;
+const FPED_CAMPOS=[{k:'data', r:'Data', t:'data', obr:true},{k:'fornecedorId', r:'Fornecedor', t:'ref', tab:'farmaFornecedores', w:2, obr:true},{k:'localId', r:'Entregar em', t:'ref', tab:'farmaLocais', obr:true},{k:'previsao', r:'Previsão de entrega', t:'data'},{k:'empenho', r:'Empenho'},{k:'processo', r:'Processo / licitação'},{k:'obs', r:'Observação'}];
+function farmaPedAbrir(id){
+  const p=id?obter('farmaPedidos',id):null;
+  FPED={id:id||null, antigo:p, itens:JSON.parse(JSON.stringify((p&&p.itens)||[])), modal:null};
+  FPED.modal=abrirModal({titulo:'🛒 Pedido de compra'+(p?' nº '+esc(p.numero):''), tamanho:'m-cheio', corpo:formHTML('fpe', FPED_CAMPOS, p||{data:hojeISO(), localId:farmaLocalAtual()})+
+    `<h3>Itens</h3><div class="formgrid"><div class="field w3">${pickerHTML('fpeProd','farmaProdutos','',{ph:'Produto', aoEscolher:'farmaPedAddProd'})}</div><div class="field"><button class="btn secondary small" onclick="farmaPedSugerir()" title="Produtos abaixo do mínimo ou que vão faltar pelo consumo dos últimos 3 meses">💡 Sugerir pelo consumo</button></div></div><div id="fpeItens" class="mt"></div>`,
+    botoes: pode('farmaPedidos')?[{r:'💾 Salvar pedido', fn:'farmaPedSalvar()'}]:[], botoesEsq: p?[{r:'🖨️ Imprimir', fn:`farmaImprimirPedido('${p.id}')`}].concat(pode('farmaPedidos')&&p.status!=='cancelado'?[{r:'Cancelar pedido', cls:'danger', fn:`farmaPedCancelar('${p.id}')`}]:[]):[]});
+  farmaPedRender();
+}
+function farmaPedAddProd(id, p){ if(!p) return; if(!FPED.itens.some(i=>i.produtoId===p.id)) FPED.itens.push({produtoId:p.id, qtd:'', valorUnit:p.precoReferencia||''}); pickerDefinir('fpeProd',''); farmaPedRender(); }
+function farmaPedRender(){ const el=document.getElementById('fpeItens'); if(!el) return;
+  el.innerHTML=FPED.itens.length?`<table class="lab-res"><thead><tr><th>Produto</th><th>Qtd</th><th>Valor unit.</th><th>Total</th><th>Recebido</th><th></th></tr></thead><tbody>${FPED.itens.map((i,n)=>`<tr><td><b>${esc(prodNome(i.produtoId))}</b> <span class="muted small">${esc(prodUn(i.produtoId))}</span>${i.motivo?`<div class="small muted">${esc(i.motivo)}</div>`:''}</td><td><input class="inp" style="width:90px;" value="${i.qtd??''}" onchange="FPED.itens[${n}].qtd=numBR(this.value);farmaPedRender()"></td><td><input class="inp" style="width:90px;" value="${i.valorUnit??''}" onchange="FPED.itens[${n}].valorUnit=numBR(this.value);farmaPedRender()"></td><td class="num">${fmtMoeda((Number(i.qtd)||0)*(Number(i.valorUnit)||0))}</td><td class="num">${fmtNum(i.recebido||0)}</td><td><button class="btn ghost small" onclick="FPED.itens.splice(${n},1);farmaPedRender()">🗑</button></td></tr>`).join('')}</tbody></table><div class="right mt"><b>Total: ${fmtMoeda(FPED.itens.reduce((t,i)=>t+(Number(i.qtd)||0)*(Number(i.valorUnit)||0),0))}</b></div>`:'<div class="muted small">Escolha os produtos ou use "Sugerir pelo consumo".</div>'; }
+async function farmaCMM(L, meses){ const atual=mesDe(hojeISO()); const ini=primeiroDiaMes(addMeses(atual,-meses)), fim=ultimoDiaMes(addMeses(atual,-1)); await garantirPeriodo(['farmaDocs'], ini, fim);
+  const c={}; lista('farmaDocs').filter(d=>d.data>=ini && d.data<=fim && d.localId===L && (d.tipo==='dispensacao'||d.tipo==='saida'||d.tipo==='transferencia') && d.status!=='cancelado').forEach(d=>(d.itens||[]).forEach(i=>{ c[i.produtoId]=(c[i.produtoId]||0)+Number(i.qtd); })); Object.keys(c).forEach(k=>c[k]=c[k]/meses); return c; }
+async function farmaPedSugerir(){
+  const L=document.getElementById('fpe_localId').value||farmaLocalAtual(); await farmaPreparar(L); const cmm=await farmaCMM(L, 3); const pp=farmaPorProduto(farmaSaldos(L)); const cob=Number(farmaCfg().coberturaMeses)||2; let n=0;
+  ativos('farmaProdutos').forEach(p=>{ const saldo=(pp[p.id]||{q:0}).q; const c=cmm[p.id]||0; const alvo=Math.max(Number(p.estoqueMaximo)||0, c*cob, Number(p.estoqueMinimo)||0); const q=Math.ceil(alvo-saldo);
+    if(q>0 && (saldo<(Number(p.estoqueMinimo)||0) || (c>0 && saldo<c*cob)) && !FPED.itens.some(i=>i.produtoId===p.id)){ FPED.itens.push({produtoId:p.id, qtd:q, valorUnit:p.precoReferencia||'', motivo:'saldo '+fmtNum(saldo)+' · consumo médio '+fmtNum(Math.round(c*10)/10)+'/mês · mínimo '+fmtNum(p.estoqueMinimo||0)}); n++; } });
+  farmaPedRender(); showToast(n?n+' produto(s) sugerido(s) — confira as quantidades.':'Nenhum produto precisa de reposição pelo consumo.', n?'success':'warning');
+}
+async function farmaPedSalvar(){
+  const {d, erros}=formLer('fpe', FPED_CAMPOS); if(mostrarErros(erros)) return; const itens=FPED.itens.filter(i=>Number(i.qtd)>0).map(i=>({produtoId:i.produtoId, qtd:Number(i.qtd), valorUnit:Number(i.valorUnit)||'', recebido:Number(i.recebido)||0}));
+  if(!itens.length){ showToast('Informe os itens.','warning'); return; }
+  const r=salvar('farmaPedidos', Object.assign({}, FPED.antigo||{}, d, {itens, numero:FPED.antigo?FPED.antigo.numero:await farmaNumero('farped', d.data), status:(FPED.antigo&&FPED.antigo.status)||'ativo'}));
+  registrarAcao((FPED.antigo?'Alterou':'Fez')+' o pedido de compra nº '+r.numero); fecharModal(FPED.modal); FPED=null; showToast('Pedido '+r.numero+' salvo.','success');
+}
+function farmaPedCancelar(id){ const p=obter('farmaPedidos',id); if(!p||!confirm('Cancelar o pedido nº '+p.numero+'?')) return; salvar('farmaPedidos', Object.assign({}, p, {status:'cancelado'})); registrarAcao('Cancelou o pedido nº '+p.numero); fecharModalTopo(); }
+function farmaImprimirPedido(id){ const p=obter('farmaPedidos',id); if(!p) return; const f=obter('farmaFornecedores',p.fornecedorId)||{}; const tot=(p.itens||[]).reduce((t,i)=>t+(Number(i.qtd)||0)*(Number(i.valorUnit)||0),0);
+  imprimirHTML(docCabecalho('Pedido de Compra', 'Nº <b>'+esc(p.numero)+'</b>', (obter('farmaLocais',p.localId)||{}).unidadeId)+`<div class="doc-box"><div class="doc-grid"><div style="grid-column:span 2;"><span>Fornecedor</span><b>${esc(f.nome||'')}</b></div><div><span>CNPJ</span>${esc(f.cnpj||'')}</div><div><span>Data</span>${fmtData(p.data)}</div><div style="grid-column:span 2;"><span>Entregar em</span>${esc(nomeDe('farmaLocais',p.localId))}</div><div><span>Previsão</span>${fmtData(p.previsao)}</div><div><span>Empenho</span>${esc(p.empenho||'')}</div></div></div>`+
+    tabelaHTML(['#','Código','Produto','Un.','Quantidade','Valor unit.','Total'], (p.itens||[]).map((i,n)=>[n+1, (obter('farmaProdutos',i.produtoId)||{}).codigo||'', prodNome(i.produtoId), prodUn(i.produtoId), fmtNum(i.qtd), i.valorUnit?fmtMoeda(i.valorUnit):'', i.valorUnit?fmtMoeda(i.qtd*i.valorUnit):'']), {num:[4,5,6], rodape:['','','','','','Total',fmtMoeda(tot)]})+`<div class="linha-ass"><div>Responsável pelo pedido</div><div>Ordenador da despesa</div></div>`); }
+
+/* ---------------- Inventário ---------------- */
+VIEWS.farmaInventario=()=>{
+  const L=farmaLocalAtual(); if(!L) return farmaLocalSel(); exigirPeriodo(['farmaInventarios'], addDias(hojeISO(),-90), hojeISO());
+  const l=ordenarPor(lista('farmaInventarios').filter(i=>i.localId===L), i=>i.data).reverse(); const aberto=l.find(i=>i.status==='aberto');
+  return `${farmaLocalSel()}<div class="helpbox">Conte o estoque e digite o que encontrou. Ao <b>encerrar</b>, o sistema lança um ajuste com as diferenças (contado − saldo no momento do encerramento), como o inventário "on-line" do SIS.</div>
+  <div class="card"><div class="flexrow mb"><span class="muted small">${l.length} inventário(s) nos últimos 3 meses</span>${aberto?`<button class="btn" onclick="farmaInvAbrir('${aberto.id}')">📋 Continuar o inventário aberto (${esc(aberto.numero)})</button>`:pode('farmaInventario')?`<button class="btn" onclick="farmaInvNovo()">+ Abrir novo inventário</button>`:''}</div>
+  ${tabelaHTML(['Nº','Data','Itens','Contados','Situação',''], l.map(i=>[`<b>${esc(i.numero)}</b>`, fmtData(i.data), (i.itens||[]).length, (i.itens||[]).filter(x=>x.qtdContada!==''&&x.qtdContada!==null&&x.qtdContada!==undefined).length, i.status==='aberto'?'<span class="badge ambar">aberto</span>':'<span class="badge ok">encerrado</span>', `<button class="btn ghost small" onclick="farmaInvAbrir('${i.id}')">👁</button>`]), {html:true})}</div>`;
+};
+async function farmaInvNovo(){
+  if(semPermissao('farmaInventario')) return; const L=farmaLocalAtual(); await farmaPreparar(L); const s=farmaSaldos(L);
+  const itens=Object.keys(s).filter(k=>Math.abs(s[k].q)>0.0001).map(k=>({produtoId:k.split('|')[0], lote:farmaLoteDaChave(k), validade:s[k].v||'', qtdSistema:s[k].q, qtdContada:''})).sort((a,b)=>prodNome(a.produtoId).localeCompare(prodNome(b.produtoId))||String(a.lote).localeCompare(String(b.lote)));
+  const r=salvar('farmaInventarios', {numero:await farmaNumero('farinv'), data:hojeISO(), localId:L, status:'aberto', itens});
+  registrarAcao('Abriu o inventário nº '+r.numero+' em '+nomeDe('farmaLocais',L)); farmaInvAbrir(r.id);
+}
+let FINV=null;
+async function farmaInvAbrir(id){
+  const inv=obter('farmaInventarios',id); if(!inv) return; await farmaPreparar(inv.localId); const s=farmaSaldos(inv.localId); const ab=inv.status==='aberto'&&pode('farmaInventario');
+  FINV={id}; abrirModal({titulo:'📋 Inventário nº '+esc(inv.numero)+' — '+esc(nomeDe('farmaLocais',inv.localId))+(ab?'':' (encerrado)'), tamanho:'m-cheio', corpo:`${ab?`<div class="formgrid mb"><div class="field w3"><label>Acrescentar produto/lote encontrado</label>${pickerHTML('finvProd','farmaProdutos','',{ph:'Produto'})}</div><div class="field"><label>Lote</label><input id="finvLote"></div><div class="field"><label>Validade</label><input type="date" id="finvVal"></div><div class="field"><label>&nbsp;</label><button class="btn secondary small" onclick="farmaInvAcrescentar('${id}')">+ Acrescentar</button></div></div>`:''}
+    <div class="table-wrap" style="max-height:460px;"><table class="lab-res"><thead><tr><th>Produto</th><th>Lote</th><th>Validade</th><th class="num">Na abertura</th><th class="num">Saldo agora</th><th>Contado</th><th class="num">Diferença</th></tr></thead><tbody>${(inv.itens||[]).map((i,n)=>{ const agora=(s[farmaChave(i.produtoId,i.lote)]||{q:0}).q; const c=i.qtdContada; const dif=c===''||c===null||c===undefined?'':Math.round((Number(c)-(ab?agora:i.qtdSistema))*1000)/1000;
+      return `<tr><td>${esc(prodNome(i.produtoId))} <span class="muted small">${esc(prodUn(i.produtoId))}</span></td><td>${esc(i.lote||'')}</td><td>${fmtData(i.validade)}</td><td class="num">${fmtNum(i.qtdSistema)}</td><td class="num">${fmtNum(agora)}</td><td>${ab?`<input class="inp finvC" data-n="${n}" style="width:90px;" value="${c??''}">`:fmtNum(c)}</td><td class="num ${dif<0?'vital-alerta':''}">${dif===''?'':fmtNum(dif)}</td></tr>`; }).join('')}</tbody></table></div>`,
+    botoes: ab?[{r:'💾 Salvar contagem', fn:`farmaInvGuardar('${id}')`},{r:'✅ Encerrar e acertar o estoque', cls:'azul', fn:`farmaInvEncerrar('${id}')`}]:[], botoesEsq:[{r:'🖨️ Folha de contagem', fn:`farmaInvFolha('${id}')`}]});
+}
+function farmaInvLer(id){ const inv=JSON.parse(JSON.stringify(obter('farmaInventarios',id))); document.querySelectorAll('.finvC').forEach(el=>{ const v=String(el.value).trim(); inv.itens[Number(el.dataset.n)].qtdContada=v===''?'':numBR(v); }); return inv; }
+function farmaInvGuardar(id, silencioso){ const inv=farmaInvLer(id); salvar('farmaInventarios', inv); if(!silencioso){ showToast('Contagem salva.','success'); fecharModalTopo(); farmaInvAbrir(id); } return inv; }
+function farmaInvAcrescentar(id){ const pid=document.getElementById('finvProd').value; if(!pid){ showToast('Escolha o produto.','warning'); return; } const inv=farmaInvGuardar(id, true); inv.itens.push({produtoId:pid, lote:document.getElementById('finvLote').value.trim().toUpperCase(), validade:document.getElementById('finvVal').value, qtdSistema:0, qtdContada:''}); salvar('farmaInventarios', inv); fecharModalTopo(); farmaInvAbrir(id); }
+async function farmaInvEncerrar(id){
+  const inv=farmaInvGuardar(id, true); const s=farmaSaldos(inv.localId); const nc=inv.itens.filter(i=>i.qtdContada===''||i.qtdContada===null).length;
+  const difs=inv.itens.filter(i=>i.qtdContada!==''&&i.qtdContada!==null).map(i=>({produtoId:i.produtoId, lote:i.lote, validade:i.validade, qtd:Math.round((Number(i.qtdContada)-((s[farmaChave(i.produtoId,i.lote)]||{q:0}).q))*1000)/1000})).filter(i=>Math.abs(i.qtd)>0.0001);
+  if(!confirm(`Encerrar o inventário?${nc?'\n'+nc+' item(ns) sem contagem ficam como estão.':''}\n${difs.length} diferença(s) serão lançadas como ajuste.`)) return;
+  let aj=null; if(difs.length) aj=await farmaSalvarDoc({tipo:'ajuste', numero:await farmaNumero('farajt'), data:hojeISO(), hora:horaAgora(), localId:inv.localId, inventarioId:inv.id, itens:difs, status:'ativo'}, null);
+  salvar('farmaInventarios', Object.assign({}, inv, {status:'encerrado', encerradoEm:agoraLocal(), encerradoPor:usuarioCurto(), ajusteId:aj?aj.id:''}));
+  registrarAcao('Encerrou o inventário nº '+inv.numero+' ('+difs.length+' ajuste(s))'); fecharModalTopo(); showToast('Inventário encerrado'+(difs.length?' — '+difs.length+' ajuste(s) lançados.':'.'),'success');
+}
+function farmaInvFolha(id){ const inv=obter('farmaInventarios',id); imprimirTabela('Folha de Contagem — Inventário '+inv.numero, esc(nomeDe('farmaLocais',inv.localId))+' — '+fmtData(inv.data), ['Código','Produto','Un.','Lote','Validade','Contado'], (inv.itens||[]).map(i=>[(obter('farmaProdutos',i.produtoId)||{}).codigo||'', prodNome(i.produtoId), prodUn(i.produtoId), i.lote||'', fmtData(i.validade), '']), {orientacao:'retrato'}); }
+
+/* ---------------- Configurações ---------------- */
+const FCFG_CAMPOS=[
+  {k:'permitirNegativo', r:'Permitir saída maior que o saldo (estoque negativo)', t:'sim', w:2},{k:'bloquearVencido', r:'Não deixar dispensar lote vencido', t:'sim', w:2},
+  {k:'exigirLote', r:'Exigir lote e validade dos medicamentos na entrada', t:'sim', w:2},{k:'exigirRetiranteControlado', r:'Controlado: exigir nome e documento de quem retirou', t:'sim', w:2},
+  {k:'diasAlertaValidade', r:'Avisar lote vencendo em (dias)', t:'int'},{k:'diasPadraoTratamento', r:'Dias de tratamento padrão (uso contínuo)', t:'int'},{k:'coberturaMeses', r:'Sugestão de compra: meses de cobertura', t:'int'},
+];
+VIEWS.farmaConfig=()=>`<div class="card"><h2>⚙️ Configurações da farmácia</h2><div class="subtitle">Valem para todos os computadores.</div>${formHTML('fcf', FCFG_CAMPOS, farmaCfg())}${pode('farmaConfig')?`<div class="actions mt"><button class="btn" onclick="farmaConfigSalvar()">💾 Salvar</button></div>`:''}</div>
+  <div class="card"><h2>🔁 Recalcular o estoque</h2><div class="subtitle">O saldo de cada mês fica guardado (fechamento) para o sistema não precisar somar tudo desde o começo. Se algum número parecer errado, recalcule: os fechamentos são apagados e refeitos a partir dos lançamentos${farmaInicio()?' (desde '+fmtMes(farmaInicio())+')':''}.</div>${isAdmin()?`<button class="btn secondary" onclick="farmaRecalcular()">🔁 Recalcular agora</button>`:'<span class="muted small">Só o administrador.</span>'}</div>`;
+function farmaConfigSalvar(){ if(semPermissao('farmaConfig')) return; const {d}=formLer('fcf', FCFG_CAMPOS); salvarConfig({farma:d}); registrarAcao('Alterou as configurações da farmácia'); showToast('Configurações salvas.','success'); }
+async function farmaRecalcular(){
+  if(!isAdmin()||!confirm('Apagar os fechamentos guardados e recalcular o estoque de todos os locais?')) return; const ini=farmaInicio(); if(!ini){ showToast('Ainda não há lançamentos.','warning'); return; }
+  carregandoMsg(true,'Recalculando o estoque…'); try{ await farmaInvalidar(lista('farmaLocais').map(l=>l.id), ini); FARMA_BASE={}; for(const l of farmaLocais()) await farmaGarantirBase(l.id); registrarAcao('Recalculou o estoque da farmácia'); showToast('Estoque recalculado.','success'); }
+  catch(e){ showToast('Falha: '+msgErro(e),'error'); } finally{ carregandoMsg(false); render(true); }
+}
+
+/* ---------------- Painel ---------------- */
+VIEWS.farmaPainel=()=>{
+  const L=farmaLocalAtual(); const passos=[[ativos('farmaLocais').length>0,'Locais de estoque',"TFARMA='farmaLocais';goto('farmaTabelas')"],[ativos('farmaProdutos').length>0,'Produtos (crie da lista de receitas ou importe do SIS)',"goto('farmaProdutos')"],[!!farmaInicio(),'Estoque inicial (entrada do tipo ESTOQUE INICIAL — dá para importar a planilha do SIS)',"goto('farmaEntradas')"]];
+  const faltam=passos.filter(p=>!p[0]);
+  const cab=faltam.length&&pode('farmaTabelas')?`<div class="card" style="border-left:4px solid var(--amber);"><h2>🚀 Para começar a usar a farmácia</h2><div class="actions">${faltam.map(f=>`<button class="btn secondary" onclick="${f[2]}">⬜ ${esc(f[1])} →</button>`).join('')}</div></div>`:'';
+  if(!L) return cab+farmaLocalSel(); if(!farmaPronto(L)) return cab+farmaLocalSel()+farmaCalculando();
+  const cfg=farmaCfg(); const H=hojeISO(), lim=addDias(H,cfg.diasAlertaValidade); const pp=farmaPorProduto(farmaSaldos(L)); const prods=ativos('farmaProdutos');
+  const abaixo=prods.filter(p=>Number(p.estoqueMinimo)>0 && (pp[p.id]||{q:0}).q<Number(p.estoqueMinimo)); const comSaldo=prods.filter(p=>(pp[p.id]||{q:0}).q>0);
+  const lotes=Object.entries(pp).flatMap(([pid,x])=>x.lotes.filter(l=>l.q>0).map(l=>Object.assign({pid},l))); const venc=lotes.filter(l=>l.v&&l.v<H), vencendo=lotes.filter(l=>l.v&&l.v>=H&&l.v<=lim);
+  const clin=podeClinico(); const disp=clin?lista('farmaDisp').filter(d=>d.localId===L&&d.status!=='cancelada'):[]; const hoje=disp.filter(d=>d.data===H), mes=disp.filter(d=>mesDe(d.data)===mesDe(H));
+  const atras=clin?farmaProximasRetiradas().filter(x=>x.atraso>0).length:0; const acv=clin?lista('farmaAltoCusto').filter(a=>a.situacao==='DEFERIDO'&&a.fimVigencia&&a.fimVigencia<=addDias(H,30)).length:0;
+  const s=(l,v,h,cls,go)=>`<div class="stat ${cls||''} ${go&&podeVer(go)?'clic':''}" ${go&&podeVer(go)?`onclick="goto('${go}')"`:''}><div class="label">${l}</div><div class="value">${v}</div>${h?`<div class="hint">${h}</div>`:''}</div>`;
+  return `${cab}${farmaLocalSel()}<div class="grid cols-6 mb">${s('Produtos com saldo', fmtNum(comSaldo.length), 'de '+fmtNum(prods.length)+' cadastrados','','farmaEstoque')}${s('Abaixo do mínimo', abaixo.length,'','alerta','farmaEstoque')}${s('Lotes vencendo', vencendo.length, 'em '+cfg.diasAlertaValidade+' dias','alerta','farmaEstoque')}${s('Lotes vencidos', venc.length, 'com saldo — dar baixa','perigo','farmaSaidas')}${clin?s('Dispensações hoje', hoje.length, mes.length+' no mês','ok','farmaDispensacao'):''}${clin?s('Retiradas atrasadas', atras, acv?acv+' processo(s) de alto custo a renovar':'','azul','farmaUsoContinuo'):''}</div>
+  ${venc.length?`<div class="alerta-erro">⚠ Lotes vencidos ainda no estoque: ${venc.slice(0,8).map(l=>esc(prodNome(l.pid))+' — '+esc(l.lote||'s/l')+' ('+fmtData(l.v)+'): '+fmtNum(l.q)).join(' · ')}${venc.length>8?'…':''}. Lance a saída "PERDA POR VALIDADE".</div>`:''}
+  ${abaixo.length?`<div class="alerta-aviso">📉 Abaixo do mínimo: ${abaixo.slice(0,10).map(p=>esc(p.nome)+' ('+fmtNum((pp[p.id]||{q:0}).q)+'/'+fmtNum(p.estoqueMinimo)+')').join(' · ')}${abaixo.length>10?'…':''}${pode('farmaPedidos')?` <a href="#" onclick="farmaPedAbrir();setTimeout(farmaPedSugerir,300);return false;">fazer pedido</a>`:''}</div>`:''}
+  ${clin?`<div class="grid cols-2" style="align-items:start;"><div class="card"><h2>Dispensações nos últimos 30 dias</h2><div class="chartbox"><canvas id="fgDias"></canvas></div></div><div class="card"><h2>Mais dispensados no mês</h2><div class="chartbox"><canvas id="fgTop"></canvas></div></div></div>`:''}
+  <div class="card"><h2>⚡ Atalhos</h2><div class="actions">${[['farmaDispensacao','🧾 Dispensar','farmaDispNova()'],['farmaEntradas','📥 Nova entrada',"farmaDocAbrir('entrada')"],['farmaTransferencias','🔄 Transferir',"farmaDocAbrir('transferencia')"],['farmaSaidas','📤 Saída / perda',"farmaDocAbrir('saida')"],['farmaEstoque','📦 Posição do estoque',"goto('farmaEstoque')"],['farmaPedidos','🛒 Pedido',"farmaPedAbrir()"]].filter(x=>x[0]==='farmaEstoque'?podeVer(x[0]):pode(x[0])&&(x[0]!=='farmaDispensacao'||clin)).map(x=>`<button class="btn secondary" onclick="${x[2]}">${x[1]}</button>`).join('')}</div></div>`;
+};
+POS_RENDER.farmaPainel=()=>{
+  if(!podeClinico()||!document.getElementById('fgDias')) return; const L=farmaLocalAtual(); const disp=lista('farmaDisp').filter(d=>d.localId===L&&d.status!=='cancelada');
+  const dias=Array.from({length:30},(_,i)=>addDias(hojeISO(), i-29)); const c=contar(disp, d=>d.data); barras('fgDias', dias.map(d=>d.slice(8)+'/'+d.slice(5,7)), dias.map(d=>c[d]||0));
+  const m={}; disp.filter(d=>mesDe(d.data)===mesDe(hojeISO())).forEach(d=>(d.itens||[]).forEach(i=>{ m[i.produtoId]=(m[i.produtoId]||0)+i.qtd; })); const top=Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  barras('fgTop', top.map(x=>prodNome(x[0]).slice(0,26)), top.map(x=>x[1]), null, true); desenharGraficosPendentes();
+};
+
+/* ---------------- Ligações com o resto do sistema ---------------- */
+function farmaBadge(id){ try{
+  if(id==='farmaUsoContinuo') return podeClinico()?farmaProximasRetiradas().filter(x=>x.atraso>0).length:0;
+  if(id==='farmaEstoque'){ const L=farmaLocalAtual(); const b=FARMA_BASE[L]; if(!b||b.mes!==addMeses(mesDe(hojeISO()),-1)) return 0; const pp=farmaPorProduto(farmaSaldos(L)); return Object.values(pp).reduce((t,x)=>t+x.lotes.filter(l=>l.q>0&&l.v&&l.v<hojeISO()).length,0); }
+}catch(e){} return 0; }
+if(typeof TIPOS_PRONT!=='undefined') TIPOS_PRONT.push(['farma','💊 Farmácia']);
+function farmaItensProntuario(pid){
+  if(!tabelaPermitida('farmaDisp')) return [];
+  return lista('farmaDisp').filter(d=>d.pacienteId===pid).map(d=>({tipo:'farma', data:d.data+'T'+(d.hora||'00:00'), titulo:'Farmácia — dispensação nº '+d.numero, badge:d.status==='cancelada'?'<span class="badge cinza">cancelada</span>':'', sub:[nomeDe('farmaLocais',d.localId), nomeDe('profissionais',d.prescritorId)||d.prescritorExterno].filter(Boolean).join(' · '), txt:(d.itens||[]).map(i=>prodNome(i.produtoId)+' — '+fmtNum(i.qtd)+' '+prodUn(i.produtoId)+(i.posologia?' — '+i.posologia:'')+(i.proxima?' (próxima retirada '+fmtData(i.proxima)+')':'')).join('\n')}));
+}
+/* receita do consultório: mostra o que há na farmácia da unidade */
+if(typeof recMedEscolhido==='function'){ const _recMed=recMedEscolhido; recMedEscolhido=function(id, m){ _recMed(id, m); try{
+  const el=document.getElementById('recQtd'); if(!el||!m) return; let h=document.getElementById('recEstoque'); if(!h){ h=document.createElement('div'); h.id='recEstoque'; h.className='dica'; el.parentNode.appendChild(h); }
+  const p=ativos('farmaProdutos').find(x=>x.medicamentoId===m.id); const loc=farmaLocais().find(l=>l.unidadeId===UNIDADE_ATUAL)||farmaLocais()[0];
+  if(!p||!loc){ h.textContent=''; return; } if(!farmaPronto(loc.id)){ h.textContent='consultando a farmácia…'; return; }
+  const q=(farmaPorProduto(farmaSaldos(loc.id))[p.id]||{q:0}).q; h.textContent='💊 '+loc.nome+': '+(q>0?fmtNum(q)+' '+prodUn(p.id)+' em estoque':'em falta'); h.style.color=q>0?'':'var(--red)';
+}catch(e){} }; }
+function moduloFarma(ligar){ const o=new Set(cfgGeral().modulosOcultos||[]); FARMA_VIEWS.forEach(i=>ligar?o.delete(i):o.add(i)); salvarConfig({modulosOcultos:[...o]}); registrarAcao((ligar?'Ligou':'Desligou')+' o Módulo Farmácia'); }
+
+/* ---------------- Importação (Módulo Menu) ---------------- */
+(function(){
+  if(typeof IMP_ALVOS==='undefined') return;
+  Object.assign(IMP_ALVOS, {
+    farmaProdutos:{titulo:'Produtos da farmácia', ic:'💊', tab:'farmaProdutos', view:'farmaProdutos', ordem:11, xml:/produto|cadpro|^ROW$/i,
+      dica:'Do SIS: tabela de produtos (CADPRO, DISC1, UNID1...). Chave: código do SIS, código de barras ou nome. Unidade, grupo, classificação e lista de controlado que faltarem são criados.',
+      campos:[
+        {k:'codigoSIS', r:'Código no SIS', sin:['CADPRO','CODIGO','COD_PRODUTO','CD_PRODUTO','CODIGO_PRODUTO','COD']},
+        {k:'nome', r:'Descrição', t:'maiusc', obr:true, sin:['DISC1','DESCRICAO','PRODUTO','NOME','DESC1','DE_PRODUTO','MEDICAMENTO','DESCRICAO_PRODUTO']},
+        {k:'unidade', r:'Unidade', t:'maiusc', aux:true, sin:['UNID1','UNIDADE','UN','UNID','UNIDADE_MEDIDA','SG_UNIDADE']},
+        {k:'grupo', r:'Grupo', t:'maiusc', aux:true, sin:['GRUPO','DE_GRUPO','NM_GRUPO']}, {k:'subgrupo', r:'Subgrupo', t:'maiusc', aux:true, sin:['SUBGRUPO','DE_SUBGRUPO']},
+        {k:'classificacao', r:'Classificação', t:'maiusc', aux:true, sin:['CLASSIFICACAO','DE_CLASSIF','CLASSIF']}, {k:'lista', r:'Lista de controlado', t:'maiusc', aux:true, sin:['PSICOTROPICO','LISTA','PORTARIA_344','LISTA_PSICOTROPICO','CONTROLADO']},
+        {k:'laboratorio', r:'Laboratório', t:'maiusc', aux:true, sin:['LABORATORIO','FABRICANTE','DE_LAB']},
+        {k:'estoqueMinimo', r:'Estoque mínimo', t:'num', sin:['ESTOQUE_MINIMO','MINIMO','EST_MINIMO','QUAN_MIN']}, {k:'estoqueMaximo', r:'Estoque máximo', t:'num', sin:['ESTOQUE_MAXIMO','MAXIMO','EST_MAXIMO']},
+        {k:'qtdEmbalagem', r:'Unidades por embalagem', t:'int', sin:['QTD_EMB','QTD_EMBALAGEM','EMBALAGEM']}, {k:'precoReferencia', r:'Preço', t:'num', sin:['VAUNVEN','VALOR_UNT','VALOR','PRECO','VALOR_UNITARIO','VAUN']},
+        {k:'codigoBarras', r:'Código de barras', sin:['CODIGO_BARRAS','EAN','GTIN','CD_BARRAS','BARRAS']}, {k:'catmat', r:'CATMAT', sin:['CATMAT','CODIGO_CATMAT']}, {k:'ativo', r:'Ativo', t:'sim', sin:['ATIVO','SITUACAO','STATUS']},
+      ],
+      chaves:r=>[r.codigoSIS&&'sis:'+norm(r.codigoSIS), r.codigoBarras&&'ean:'+soDigitos(r.codigoBarras), r.nome&&'nome:'+farmaPalavras(r.nome).join(' ')],
+      montar(r, o, ctx){
+        const ref=(tab, campo, val, novo)=>{ if(!val) return ''; const x=impRefPor(ctx, tab, campo, campo==='nome'?norm(val):val, novo); return x?x.id:''; };
+        r.unidadeMedidaId=r.unidade?(ref('farmaUnidadesMedida','sigla',r.unidade.replace(/\s+/g,'').slice(0,6),null)||ref('farmaUnidadesMedida','nome',r.unidade,{sigla:r.unidade.replace(/\s+/g,'').slice(0,6), nome:r.unidade})):farmaUnidadePorTexto(r.nome);
+        r.grupoId=ref('farmaGrupos','nome',r.grupo||'MEDICAMENTOS',{nome:r.grupo||'MEDICAMENTOS'}); if(r.subgrupo) r.subgrupoId=ref('farmaSubgrupos','nome',r.subgrupo,{nome:r.subgrupo, grupoId:r.grupoId});
+        if(r.classificacao) r.classificacaoId=ref('farmaClassificacoes','nome',r.classificacao,{nome:r.classificacao}); if(r.laboratorio) r.laboratorioId=ref('farmaLaboratorios','nome',r.laboratorio,{nome:r.laboratorio});
+        if(r.lista && /^[ABC]\d/.test(r.lista)) r.listaId=ref('farmaListas','nome',r.lista.slice(0,2),{nome:r.lista.slice(0,2), validadeReceitaDias:30});
+        r.tipo=/MATERIAL|INSUMO/.test(norm(r.grupo||''))?'MATERIAL':'MEDICAMENTO'; if(r.ativo===undefined) r.ativo=true;
+        ['unidade','grupo','subgrupo','classificacao','lista','laboratorio'].forEach(k=>delete r[k]);
+      },
+      validar:r=>!r.nome?'sem descrição':'', avisos:r=>[!r.unidadeMedidaId&&'sem unidade'].filter(Boolean),
+      prev:[['codigoSIS','Código SIS'],['nome','Produto'],['estoqueMinimo','Mínimo'],['codigoBarras','Barras']]},
+    farmaFornecedores:{titulo:'Fornecedores', ic:'🏭', tab:'farmaFornecedores', view:'farmaFornecedores', ordem:12, xml:/fornec|^ROW$/i, dica:'Chave: CNPJ, código do SIS ou nome.',
+      campos:[{k:'nome', r:'Nome', t:'maiusc', obr:true, sin:['FORNECEDOR','NOME','RAZAO_SOCIAL','RAZAO','NOME_FANTASIA','DE_FORNECEDOR']},{k:'cnpj', r:'CNPJ/CPF', sin:['CNPJ','CPF_CNPJ','CNPJ_CPF','NU_CNPJ','CGC']},{k:'telefone', r:'Telefone', t:'tel', sin:['TELEFONE','FONE']},{k:'email', r:'E-mail', t:'email', sin:['EMAIL','E-MAIL']},{k:'contato', r:'Contato', sin:['CONTATO']},{k:'municipio', r:'Município', t:'maiusc', sin:['MUNICIPIO','CIDADE']},{k:'uf', r:'UF', t:'uf', sin:['UF']},{k:'codigoSIS', r:'Código no SIS', sin:['CD_FORNECEDOR','COD_FORNECEDOR','CODIGO']}],
+      chaves:r=>[r.cnpj&&'cnpj:'+soDigitos(r.cnpj), r.codigoSIS&&'sis:'+norm(r.codigoSIS), r.nome&&'nome:'+norm(r.nome)], montar(r){ if(r.cnpj) r.cnpj=soDigitos(r.cnpj); r.ativo=true; }, validar:r=>!r.nome?'sem nome':'', prev:[['nome','Fornecedor'],['cnpj','CNPJ'],['municipio','Município']]},
+  });
+})();
+
+/* ---------------- Relatórios ---------------- */
+async function farmaLocaisDoFiltro(F){ const ls=F.farmaLocal?[F.farmaLocal]:farmaLocais().map(l=>l.id); for(const L of ls) if(!farmaPronto(L)) await farmaGarantirBase(L); return ls; }
+function farmaFiltroProd(F){ return p=>(!F.farmaGrupo||p.grupoId===F.farmaGrupo) && (!F.farmaLista||p.listaId===F.farmaLista) && (!F.farmaProduto||p.id===F.farmaProduto); }
+async function farmaMovimentoPeriodo(F){ await garantirPeriodo(['farmaDocs'].concat(podeClinico()?['farmaDisp']:[]), F.ini, F.fim); return lista('farmaDocs').filter(d=>d.data>=F.ini && d.data<=F.fim && d.status!=='cancelado'); }
+RELS.push(
+  {mod:'farma', id:'farmaPosicao', g:'Estoque', t:'Posição do estoque', f:['farmaLocal','farmaGrupo','farmaLista'], tabs:[], gerar:async F=>{ const ls=await farmaLocaisDoFiltro(F); const tot={}; ls.forEach(L=>{ const pp=farmaPorProduto(farmaSaldos(L)); Object.keys(pp).forEach(p=>{ tot[p]=(tot[p]||0)+pp[p].q; }); });
+    const ps=ordenarTexto(ativos('farmaProdutos').filter(farmaFiltroProd(F)).filter(p=>tot[p.id]), p=>nomeDe('farmaGrupos',p.grupoId)+p.nome); const linhas=ps.map(p=>[p.codigo||p.codigoSIS||'', p.nome, prodUn(p.id), nomeDe('farmaGrupos',p.grupoId), fmtNum(tot[p.id]), p.estoqueMinimo?fmtNum(p.estoqueMinimo):'', fmtMoeda(Math.max(0,tot[p.id])*(Number(p.precoReferencia)||0))]);
+    return {cab:['Código','Produto','Un.','Grupo','Saldo','Mínimo','Valor'], linhas, num:[4,5,6], rodape:['','Total','','','','',fmtMoeda(ps.reduce((t,p)=>t+Math.max(0,tot[p.id])*(Number(p.precoReferencia)||0),0))], sub:F.farmaLocal?nomeDe('farmaLocais',F.farmaLocal):'Todos os locais'}; }},
+  {mod:'farma', id:'farmaDistrib', g:'Estoque', t:'Estoque distribuído por local', f:['farmaGrupo','farmaProduto'], tabs:[], gerar:async F=>{ const ls=await farmaLocaisDoFiltro({}); const pp=ls.map(L=>farmaPorProduto(farmaSaldos(L)));
+    const ps=ordenarTexto(ativos('farmaProdutos').filter(farmaFiltroProd(F)).filter(p=>pp.some(x=>x[p.id]&&x[p.id].q)), p=>p.nome);
+    return {cab:['Produto','Un.'].concat(ls.map(L=>nomeDe('farmaLocais',L))).concat(['Total']), linhas:ps.map(p=>{ const v=pp.map(x=>(x[p.id]||{q:0}).q); return [p.nome, prodUn(p.id)].concat(v.map(x=>fmtNum(x))).concat([fmtNum(v.reduce((a,b)=>a+b,0))]); }), num:ls.map((_,i)=>i+2).concat([ls.length+2]), orientacao:'paisagem'}; }},
+  {mod:'farma', id:'farmaBalancete', g:'Estoque', t:'Balancete (entradas, saídas e saldos)', f:['periodo','farmaLocal','farmaGrupo','farmaLista'], tabs:[], gerar:async F=>{
+    const ls=await farmaLocaisDoFiltro(F); const ini={}; for(const L of ls){ const s=await farmaSaldosEm(L, addDias(F.ini,-1)); Object.keys(s).forEach(k=>{ const p=k.split('|')[0]; ini[p]=(ini[p]||0)+s[k].q; }); }
+    const docs=await farmaMovimentoPeriodo(F); const m={}; const g=p=>m[p]||(m[p]={ent:0,disp:0,sai:0,perda:0,te:0,ts:0,aj:0});
+    docs.forEach(d=>{ const perda=d.tipo==='saida'&&(obter('farmaTiposLanc',d.tipoLancId)||{}).perda; farmaDeltas(d).forEach(([loc,k,q])=>{ if(!ls.includes(loc)) return; if(d.tipo==='transferencia'&&ls.includes(d.localId)&&ls.includes(d.destinoId)) return; const x=g(k.split('|')[0]);
+      if(d.tipo==='entrada') x.ent+=q; else if(d.tipo==='dispensacao') x.disp-=q; else if(d.tipo==='saida') perda?x.perda-=q:x.sai-=q; else if(d.tipo==='transferencia') q>0?x.te+=q:x.ts-=q; else x.aj+=q; }); });
+    const ps=ordenarTexto(ativos('farmaProdutos').filter(farmaFiltroProd(F)).filter(p=>ini[p.id]||m[p.id]), p=>p.nome);
+    const linhas=ps.map(p=>{ const x=m[p.id]||g(p.id); const i=Math.round((ini[p.id]||0)*1000)/1000; const fim=Math.round((i+x.ent-x.disp-x.sai-x.perda+x.te-x.ts+x.aj)*1000)/1000; return [p.nome, prodUn(p.id), fmtNum(i), fmtNum(x.ent), fmtNum(x.te), fmtNum(x.disp), fmtNum(x.sai), fmtNum(x.perda), fmtNum(x.ts), fmtNum(x.aj), fmtNum(fim), fmtMoeda(Math.max(0,fim)*(Number(p.precoReferencia)||0))]; });
+    return {cab:['Produto','Un.','Saldo inicial','Entradas','Transf. recebidas','Dispensado','Saídas internas','Perdas','Transf. enviadas','Ajustes','Saldo final','Valor final'], linhas, num:[2,3,4,5,6,7,8,9,10,11], orientacao:'paisagem', sub:F.farmaLocal?nomeDe('farmaLocais',F.farmaLocal):'Todos os locais'}; }},
+  {mod:'farma', id:'farmaFichaRel', g:'Estoque', t:'Ficha de movimentação do produto', f:['periodo','farmaLocal','farmaProduto'], tabs:[], gerar:async F=>{ if(!F.farmaProduto) return {erro:'Escolha o produto.'}; const ls=await farmaLocaisDoFiltro(F); const k=await farmaKardex(ls, F.farmaProduto, F.ini, F.fim);
+    return {cab:['Data','Histórico','Lote','Entrada','Saída','Saldo'], linhas:[['','SALDO ANTERIOR','','','',fmtNum(k.saldoIni)]].concat(k.linhas.map(x=>[fmtData(x.data), x.hist, x.lote, x.ent?fmtNum(x.ent):'', x.sai?fmtNum(x.sai):'', fmtNum(x.saldo)])), num:[3,4,5], sub:prodNome(F.farmaProduto)+' — '+(F.farmaLocal?nomeDe('farmaLocais',F.farmaLocal):'todos os locais'), orientacao:'paisagem'}; }},
+  {mod:'farma', id:'farmaMinimo', g:'Estoque', t:'Produtos abaixo do mínimo e sugestão de compra', f:['farmaLocal','farmaGrupo'], tabs:[], gerar:async F=>{ if(!F.farmaLocal) return {erro:'Escolha o local de estoque.'}; await farmaLocaisDoFiltro(F); const pp=farmaPorProduto(farmaSaldos(F.farmaLocal)); const cmm=await farmaCMM(F.farmaLocal, 3); const cob=Number(farmaCfg().coberturaMeses)||2;
+    const ps=ativos('farmaProdutos').filter(farmaFiltroProd(F)).map(p=>({p, s:(pp[p.id]||{q:0}).q, c:cmm[p.id]||0})).filter(x=>(Number(x.p.estoqueMinimo)>0&&x.s<Number(x.p.estoqueMinimo))||(x.c>0&&x.s<x.c*cob));
+    return {cab:['Produto','Un.','Saldo','Mínimo','Consumo médio/mês','Sugestão de compra'], linhas:ordenarTexto(ps, x=>x.p.nome).map(x=>[x.p.nome, prodUn(x.p.id), fmtNum(x.s), fmtNum(x.p.estoqueMinimo||0), fmtNum(Math.round(x.c*10)/10), fmtNum(Math.max(0, Math.ceil(Math.max(Number(x.p.estoqueMaximo)||0, x.c*cob, Number(x.p.estoqueMinimo)||0)-x.s)))]), num:[2,3,4,5]}; }},
+  {mod:'farma', id:'farmaValidade', g:'Estoque', t:'Lotes vencidos e a vencer', f:['farmaLocal','dias'], tabs:[], gerar:async F=>{ const ls=await farmaLocaisDoFiltro(F); const lim=addDias(hojeISO(), Number(F.dias)||60); const l=[];
+    ls.forEach(L=>{ const s=farmaSaldos(L); Object.keys(s).forEach(k=>{ const x=s[k]; if(x.q>0 && x.v && x.v<=lim){ const p=obter('farmaProdutos',k.split('|')[0])||{}; l.push([nomeDe('farmaLocais',L), p.nome||'', farmaLoteDaChave(k), fmtData(x.v), diffDias(hojeISO(),x.v)<0?'VENCIDO':diffDias(hojeISO(),x.v)+' dia(s)', fmtNum(x.q), fmtMoeda(x.q*(Number(p.precoReferencia)||0))]); } }); });
+    l.sort((a,b)=>a[3].split('/').reverse().join('').localeCompare(b[3].split('/').reverse().join(''))); return {cab:['Local','Produto','Lote','Validade','Situação','Saldo','Valor'], linhas:l, num:[5,6], sub:'Até '+fmtData(lim)}; }},
+  {mod:'farma', id:'farmaResumo', g:'Movimentação', t:'Resumo por tipo de lançamento', f:['periodo','farmaLocal'], tabs:[], gerar:async F=>{ const ls=await farmaLocaisDoFiltro(F); const docs=(await farmaMovimentoPeriodo(F)).filter(d=>ls.includes(d.localId)||ls.includes(d.destinoId)); const m={};
+    docs.forEach(d=>{ const k=(FARMA_TIPO_NOME[d.tipo]||[d.tipo])[0]+(d.tipoLancId?' — '+nomeDe('farmaTiposLanc',d.tipoLancId):''); const x=m[k]||(m[k]={n:0,itens:0,qtd:0,valor:0}); x.n++; (d.itens||[]).forEach(i=>{ x.itens++; x.qtd+=Math.abs(Number(i.qtd)||0); x.valor+=Math.abs(Number(i.qtd)||0)*(Number(i.valorUnit)||Number((obter('farmaProdutos',i.produtoId)||{}).precoReferencia)||0); }); });
+    const linhas=Object.entries(m).sort().map(([k,x])=>[k, x.n, x.itens, fmtNum(x.qtd), fmtMoeda(x.valor)]); return {cab:['Tipo','Lançamentos','Itens','Quantidade','Valor (estimado)'], linhas, num:[1,2,3,4]}; }},
+  {mod:'farma', id:'farmaEstatMes', g:'Movimentação', t:'Estatística mensal de saídas por produto', f:['farmaLocal','farmaGrupo'], tabs:[], gerar:async F=>{ const atual=mesDe(hojeISO()); const ms=Array.from({length:12},(_,i)=>addMeses(atual,i-11)); await garantirPeriodo(['farmaDocs'], ms[0]+'-01', hojeISO()); const ls=F.farmaLocal?[F.farmaLocal]:farmaLocais().map(l=>l.id); const m={};
+    lista('farmaDocs').filter(d=>(d.tipo==='dispensacao'||d.tipo==='saida')&&d.status!=='cancelado'&&ls.includes(d.localId)&&mesDe(d.data)>=ms[0]).forEach(d=>(d.itens||[]).forEach(i=>{ const x=m[i.produtoId]||(m[i.produtoId]={}); x[mesDe(d.data)]=(x[mesDe(d.data)]||0)+Number(i.qtd); }));
+    const ps=ordenarTexto(ativos('farmaProdutos').filter(farmaFiltroProd(F)).filter(p=>m[p.id]), p=>p.nome); return {cab:['Produto'].concat(ms.map(x=>fmtMes(x).slice(0,3)+'/'+x.slice(2,4))).concat(['Total','Média']), linhas:ps.map(p=>{ const v=ms.map(x=>m[p.id][x]||0); const t=v.reduce((a,b)=>a+b,0); return [p.nome].concat(v.map(x=>fmtNum(x))).concat([fmtNum(t), fmtNum(Math.round(t/12*10)/10)]); }), num:ms.map((_,i)=>i+1).concat([13,14]), orientacao:'paisagem'}; }},
+  {mod:'farma', id:'farmaTransfRel', g:'Movimentação', t:'Transferências entre locais', f:['periodo'], tabs:[], gerar:async F=>{ const docs=(await farmaMovimentoPeriodo(F)).filter(d=>d.tipo==='transferencia'); return {cab:['Data','Nº','De','Para','Produto','Lote','Qtd'], linhas:docs.flatMap(d=>(d.itens||[]).map(i=>[fmtData(d.data), d.numero, nomeDe('farmaLocais',d.localId), nomeDe('farmaLocais',d.destinoId), prodNome(i.produtoId), i.lote||'', fmtNum(i.qtd)])), num:[6], orientacao:'paisagem'}; }},
+  {mod:'farma', id:'farmaPorProf', g:'Dispensação', clin:true, t:'Saídas por prescritor (médico/profissional)', f:['periodo','farmaLocal'], tabs:[], gerar:async F=>{ await garantirPeriodo(['farmaDisp'], F.ini, F.fim); const m={}; lista('farmaDisp').filter(d=>d.status!=='cancelada'&&d.data>=F.ini&&d.data<=F.fim&&(!F.farmaLocal||d.localId===F.farmaLocal)).forEach(d=>{ const k=nomeDe('profissionais',d.prescritorId)||d.prescritorExterno||'(não informado)'; (d.itens||[]).forEach(i=>{ const kk=k+'|'+i.produtoId; m[kk]=(m[kk]||0)+i.qtd; }); });
+    return {cab:['Prescritor','Produto','Un.','Quantidade'], linhas:Object.entries(m).sort().map(([k,q])=>{ const [pr,pid]=k.split('|'); return [pr, prodNome(pid), prodUn(pid), fmtNum(q)]; }), num:[3]}; }},
+  {mod:'farma', id:'farmaPorPac', g:'Dispensação', clin:true, t:'Dispensações por paciente', f:['periodo','farmaLocal','farmaProduto'], tabs:[], gerar:async F=>{ await garantirPeriodo(['farmaDisp'], F.ini, F.fim); const l=[]; lista('farmaDisp').filter(d=>d.status!=='cancelada'&&d.data>=F.ini&&d.data<=F.fim&&(!F.farmaLocal||d.localId===F.farmaLocal)).forEach(d=>(d.itens||[]).filter(i=>!F.farmaProduto||i.produtoId===F.farmaProduto).forEach(i=>{ const p=pacDe(d.pacienteId); l.push([fmtData(d.data), d.numero, p.nome||'', fmtCNS(p.cns), prodNome(i.produtoId), i.lote||'', fmtNum(i.qtd), nomeDe('profissionais',d.prescritorId)||d.prescritorExterno||'']); }));
+    return {cab:['Data','Nº','Paciente','CNS','Produto','Lote','Qtd','Prescritor'], linhas:l.sort((a,b)=>a[2].localeCompare(b[2])), num:[6], orientacao:'paisagem'}; }},
+  {mod:'farma', id:'farmaReceitasRel', g:'Dispensação', clin:true, t:'Relação de receitas atendidas', f:['periodo','farmaLocal'], tabs:[], gerar:async F=>{ await garantirPeriodo(['farmaDisp'], F.ini, F.fim); const ds=ordenarPor(lista('farmaDisp').filter(d=>d.status!=='cancelada'&&d.data>=F.ini&&d.data<=F.fim&&(!F.farmaLocal||d.localId===F.farmaLocal)&&(d.receitaNumero||d.receitaId)), d=>d.data);
+    return {cab:['Data','Dispensação','Paciente','Tipo de receita','Nº receita','Data receita','Prescritor','Itens'], linhas:ds.map(d=>[fmtData(d.data), d.numero, pacDe(d.pacienteId).nome||'', d.receitaTipo||'', d.receitaNumero||(d.receitaId?'consultório':''), fmtData(d.receitaData), nomeDe('profissionais',d.prescritorId)||d.prescritorExterno||'', (d.itens||[]).map(i=>prodNome(i.produtoId)+' × '+fmtNum(i.qtd)).join('; ')]), orientacao:'paisagem'}; }},
+  {mod:'farma', id:'farmaLivro', g:'Controlados', clin:true, t:'Livro de registro de medicamentos controlados (Portaria 344)', f:['periodo','farmaLocal','farmaLista','farmaProduto'], tabs:[], gerar:async F=>{ if(!F.farmaLocal) return {erro:'Escolha o local de estoque (o livro é por estabelecimento).'};
+    const ps=ordenarTexto(ativos('farmaProdutos').filter(p=>p.listaId).filter(farmaFiltroProd(F)), p=>nomeDe('farmaListas',p.listaId)+p.nome); const linhas=[];
+    for(const p of ps){ const k=await farmaKardex([F.farmaLocal], p.id, F.ini, F.fim); if(!k.saldoIni && !k.linhas.length) continue; const lst=(obter('farmaListas',p.listaId)||{}).nome||'';
+      linhas.push([lst, p.nome, '', 'SALDO ANTERIOR', '', '', '', '', fmtNum(k.saldoIni)]);
+      k.linhas.forEach(x=>{ const d=x.doc; let hist=x.hist, pac='', presc='', rec=''; if(d.tipo==='dispensacao'){ const dp=obter('farmaDisp', d.dispId)||{}; pac=(pacDe(dp.pacienteId).nome||'')+(dp.retiranteNome?' (retirado por '+dp.retiranteNome+' '+(dp.retiranteDoc||'')+')':''); const pr=obter('profissionais',dp.prescritorId); presc=pr?pr.nome+' '+[pr.conselho,pr.registro].filter(Boolean).join(' '):(dp.prescritorExterno||''); rec=(dp.receitaTipo||'')+' '+(dp.receitaNumero||''); hist='Dispensação nº '+d.numero; }
+        linhas.push([lst, p.nome, fmtData(x.data), hist+(x.lote?' — lote '+x.lote:''), pac, presc, rec, x.ent?fmtNum(x.ent):(x.sai?'-'+fmtNum(x.sai):''), fmtNum(x.saldo)]); }); }
+    return {cab:['Lista','Medicamento','Data','Histórico','Paciente / comprador','Prescritor (registro)','Receita / notificação','Movimento','Saldo'], linhas, orientacao:'paisagem', sub:nomeDe('farmaLocais',F.farmaLocal)}; }},
+  {mod:'farma', id:'farmaAltoCustoRel', g:'Dispensação', clin:true, t:'Alto custo: processos a vencer', f:['dias'], tabs:[], gerar:F=>{ const lim=addDias(hojeISO(), Number(F.dias)||60); const l=ordenarPor(lista('farmaAltoCusto').filter(a=>a.situacao==='DEFERIDO'&&a.fimVigencia&&a.fimVigencia<=lim), a=>a.fimVigencia);
+    return {cab:['Paciente','Telefone','Medicamento','Processo','Fim da vigência','Situação'], linhas:l.map(a=>{ const p=pacDe(a.pacienteId); return [p.nome||'', fmtTel(p.celular||p.telefone), a.medicamento||'', a.processo||'', fmtData(a.fimVigencia), a.fimVigencia<hojeISO()?'VENCIDA':'a vencer']; }), sub:'Vigência até '+fmtData(lim)}; }}
+);
+VIEWS.farmaRelatorios=()=>relatoriosHTML('farma');
+POS_RENDER.farmaRelatorios=()=>POS_RENDER.relatorios();
+
+/* ---------------- Demonstração ---------------- */
+async function seedDemoFarma(){
+  if(!MODO_DEMO || lista('farmaDocs').length || !lista('pacientes').length || !lista('farmaGrupos').length) return;
+  if(!lista('farmaProdutos').length) await farmaCriarDosMedicamentos(true);
+  const ubs=lista('unidades').find(u=>u.nome==='UBS CENTRAL')||lista('unidades')[0];
+  const alm=salvar('farmaLocais',{nome:'ALMOXARIFADO CENTRAL', tipo:'ALMOXARIFADO CENTRAL', ativo:true});
+  const far=salvar('farmaLocais',{nome:'FARMÁCIA MUNICIPAL', tipo:'FARMÁCIA MUNICIPAL', unidadeId:ubs.id, ativo:true});
+  const forn=salvar('farmaFornecedores',{nome:'DISTRIBUIDORA DE MEDICAMENTOS EXEMPLO LTDA', cnpj:'00000000000191', municipio:'RIBEIRÃO PRETO', uf:'SP', ativo:true});
+  const P=n=>lista('farmaProdutos').find(p=>norm(p.nome)===norm(n))||lista('farmaProdutos').find(p=>norm(p.nome).startsWith(norm(n)))||{}; const TL=n=>(lista('farmaTiposLanc').find(t=>t.nome===n)||{}).id;
+  lista('farmaProdutos').forEach(p=>{ if(/LOSARTANA|METFORMINA|DIPIRONA 500 MG$|OMEPRAZOL|SINVASTATINA/.test(p.nome)) salvar('farmaProdutos', Object.assign({}, p, {estoqueMinimo:300, precoReferencia:0.08})); });
+  const H=hojeISO(), M1=addMeses(mesDe(H),-1); const d1=M1+'-05', d2=M1+'-10', d3=M1+'-20';
+  const it=(n,lote,val,q,v)=>({produtoId:P(n).id, lote, validade:val, qtd:q, valorUnit:v||''});
+  const ano=Number(H.slice(0,4));
+  await farmaSalvarDoc({tipo:'entrada', numero:await farmaNumero('farent',d1), data:d1, hora:'08:00', localId:alm.id, tipoLancId:TL('ESTOQUE INICIAL'), itens:[it('LOSARTANA','LS2401',(ano+1)+'-06-30',3000,0.07),it('METFORMINA','MT2402',(ano+1)+'-03-31',2000,0.09),it('DIPIRONA 500 MG','DP2403',addDias(H,20),600,0.05),it('OMEPRAZOL','OM2404',(ano+1)+'-08-31',1500,0.06),it('SINVASTATINA','SV2405',(ano+1)+'-01-31',1000,0.10),it('AMOXICILINA 500','AX2406',(ano+1)+'-02-28',800,0.25),it('CLONAZEPAM','CZ2407',(ano+1)+'-05-31',300,0.12),it('PARACETAMOL 500','PC2301',addDias(H,-10),200,0.04)], status:'ativo'}, null);
+  await farmaSalvarDoc({tipo:'entrada', numero:await farmaNumero('farent',d2), data:d2, hora:'09:00', localId:alm.id, tipoLancId:TL('COMPRA DE FORNECEDOR'), fornecedorId:forn.id, nf:'12345', nfEmissao:d2, itens:[it('LOSARTANA','LS2408',(ano+1)+'-09-30',2000,0.08)], status:'ativo'}, null);
+  await farmaSalvarDoc({tipo:'transferencia', numero:await farmaNumero('fartrf',d3), data:d3, hora:'10:00', localId:alm.id, destinoId:far.id, itens:[it('LOSARTANA','LS2401',(ano+1)+'-06-30',1200),it('METFORMINA','MT2402',(ano+1)+'-03-31',900),it('DIPIRONA 500 MG','DP2403',addDias(H,20),400),it('OMEPRAZOL','OM2404',(ano+1)+'-08-31',600),it('SINVASTATINA','SV2405',(ano+1)+'-01-31',350),it('AMOXICILINA 500','AX2406',(ano+1)+'-02-28',300),it('CLONAZEPAM','CZ2407',(ano+1)+'-05-31',120),it('PARACETAMOL 500','PC2301',addDias(H,-10),100)], status:'ativo'}, null);
+  const ps=lista('pacientes'); const pac=n=>ps.find(p=>p.nome===n)||ps[0]; const dr=lista('profissionais').find(p=>p.tipo==='medico')||{};
+  const disp=(pn, data, itens, extra)=>farmaGravarDisp(Object.assign({data, hora:'10:30', localId:far.id, pacienteId:pac(pn).id, prescritorId:dr.id, receitaTipo:'SIMPLES', receitaData:data, itens:itens.map(x=>({produtoId:P(x[0]).id, lote:x[1], validade:x[2], qtd:x[3], posologia:x[4]||'', dias:x[5]||''}))}, extra||{}));
+  await disp('MARIA APARECIDA DOS SANTOS', addDias(d3,1), [['LOSARTANA','LS2401',(ano+1)+'-06-30',60,'1 COMPRIMIDO DE 12 EM 12 HORAS',30]]);
+  await disp('JOÃO BATISTA OLIVEIRA', addDias(d3,2), [['METFORMINA','MT2402',(ano+1)+'-03-31',30,'1 COMPRIMIDO APÓS CAFÉ E JANTAR',15],['SINVASTATINA','SV2405',(ano+1)+'-01-31',30,'1 À NOITE',30]]);
+  await disp('ANTÔNIO CARLOS PEREIRA', H, [['OMEPRAZOL','OM2404',(ano+1)+'-08-31',30,'1 CÁPSULA EM JEJUM',30],['DIPIRONA 500 MG','DP2403',addDias(H,20),10,'SE DOR']]);
+  await disp('TEREZINHA GOMES', H, [['CLONAZEPAM','CZ2407',(ano+1)+'-05-31',30,'1 À NOITE',30]], {receitaTipo:'NOTIFICAÇÃO B', receitaNumero:'1234567', retiranteNome:'FILHA — ANA GOMES', retiranteDoc:'RG 00.000.000-0'});
+  await farmaSalvarDoc({tipo:'saida', numero:await farmaNumero('farsai',H), data:H, hora:'11:00', localId:far.id, tipoLancId:TL('CONSUMO INTERNO DA UNIDADE'), destino:'SALA DE CURATIVO', itens:[it('DIPIRONA 500 MG','DP2403',addDias(H,20),20)], status:'ativo'}, null);
+  salvar('farmaPedidos', {numero:await farmaNumero('farped',H), data:H, fornecedorId:forn.id, localId:alm.id, previsao:addDias(H,15), itens:[{produtoId:P('METFORMINA').id, qtd:2000, valorUnit:0.09, recebido:0},{produtoId:P('DIPIRONA 500 MG').id, qtd:1000, valorUnit:0.05, recebido:0}], status:'ativo'});
+  salvar('farmaBlocos', {profissionalId:dr.id, tipo:'NOTIFICAÇÃO B', serieInicial:'1234500', serieFinal:'1234599', data:addDias(H,-60), ativo:true});
+  salvar('farmaAltoCusto', {pacienteId:pac('JOÃO BATISTA OLIVEIRA').id, processo:'LME 2026/00123', tipo:'SOLICITAÇÃO INICIAL', situacao:'DEFERIDO', medicamento:'INSULINA ANÁLOGA DE AÇÃO PROLONGADA', cid:'E10', prescritorId:dr.id, dataSolicitacao:addDias(H,-170), inicioVigencia:addDias(H,-160), fimVigencia:addDias(H,20), retiradas:[]});
+  FARMA_LOCAL=far.id;
+}
 
 </script>
 </body>
