@@ -573,10 +573,15 @@ const DOC_CONTADORES = 'contadores';
                              unidades, CBO, destinos, bairros, ruas, convênios, medicamentos e exames
                              do Fiorilli SIS (XML/TXT), e-SUS (XML/zip), CNES e planilhas; histórico
                              com "desfazer"
+     1.04.2026  14/10/2026   MÓDULO MENU (equivalente ao SIS_MENU), no topo do menu: cadastros comuns saem
+                             do Ambulatório (entidade, unidades, profissionais, outras entidades, endereços)
+                             + funcionários, mantenedores, tipos de logradouro e municípios do IBGE;
+                             importar/exportar dados; usuários, perfis, recados, log, unificar
+                             profissionais, segurança; conexão/senha e ajuda. Ambulatório renumerado 1 a 9
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 3;
+const APP_ALTERACAO = 4;
 const APP_DATA = '2026-10-14';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -808,12 +813,16 @@ const TABELAS = {
   labLotes:{modo:'mes',campo:'data',partes:1,clinico:true},
   labProducao:{modo:'mes',campo:'data',partes:4},  /* produção SIGTAP dos exames liberados (sem resultado): o faturamento lê sem acesso clínico */
   importacoes:{},  /* histórico da tela "Importar de Outros Sistemas" */
+  /* ---- MÓDULO MENU ---- */
+  funcionarios:{}, mantenedores:{}, tiposLogradouro:{},
+  municipios:{modo:'hash',partes:8},           /* lista do IBGE: até 5.570 municípios */
+  recados:{modo:'mes',campo:'em',partes:1},
 };
 /* Capacidade: cada parte guarda até ~900 KB. Com as partes acima o sistema comporta, por exemplo,
    ~40 mil pacientes, ~100 mil doses de vacina e ~3 mil atendimentos por mês. Para um município
    maior, aumente as partes ANTES de começar a usar (depois disso o número não pode mudar).
    Meses carregados ao entrar (os demais são buscados quando um relatório ou prontuário precisa): */
-const JANELA_MESES = { agendamentos:[0,2], agendExames:[0,2], agendTransportes:[0,2], atendimentos:[-1,0], clinico:[0,0], producao:[0,0], sadt:[0,0], viagens:[0,1], labRequisicoes:[-1,0], labLotes:[-2,0], labProducao:[0,0] };
+const JANELA_MESES = { agendamentos:[0,2], agendExames:[0,2], agendTransportes:[0,2], atendimentos:[-1,0], clinico:[0,0], producao:[0,0], sadt:[0,0], viagens:[0,1], labRequisicoes:[-1,0], labLotes:[-2,0], labProducao:[0,0], recados:[-2,0] };
 
 const DELETE = {__excluir:true};
 function caminhoSet(obj, caminho, v){ const i=caminho.indexOf('.'); if(i<0){ obj[caminho]=v; return; } const a=caminho.slice(0,i), b=caminho.slice(i+1); if(!obj[a]||typeof obj[a]!=='object') obj[a]={}; obj[a][b]=v; }
@@ -1148,31 +1157,56 @@ function carregandoMsg(on, msg){
    aqui, as tabelas em TABELAS e as telas em VIEWS.
    ============================================================ */
 const MENU = [
-  {g:'Visão Geral', ic:'📊', itens:[
-    {id:'painel', r:'Painel do dia', ic:'📊', d:'Resumo do dia: fila de atendimento, agenda, alertas dos programas de saúde e indicadores do mês.'},
+  /* ---- MÓDULO MENU (equivalente ao SIS_MENU): cadastros comuns a todos os módulos, importação e utilitários ---- */
+  {g:'Visão Geral do Sistema', ic:'🧭', itens:[
+    {id:'menuPainel', r:'Painel Geral', ic:'🧭', todos:1, d:'Visão geral do sistema: cadastros, módulos instalados, recados, primeiros passos e últimas importações.'},
+    {id:'modulos', r:'Módulos do Sistema', ic:'🧩', d:'Módulos instalados, módulos planejados e ligação com os outros aplicativos da Secretaria.'},
   ]},
-  {g:'1. Cadastros Gerais', ic:'🗂️', itens:[
+  {g:'1. Cadastros', ic:'🗂️', itens:[
     {id:'entidade', r:'Entidade', ic:'🏛️', d:'Dados da prefeitura/secretaria, brasão e logo que aparecem em todos os documentos e relatórios.'},
     {id:'unidades', r:'Unidades de Saúde', ic:'🏥', d:'UBS, ESF, Pronto Atendimento, Centro de Especialidades... (código CNES e dados da unidade).'},
     {id:'profissionais', r:'Profissionais', ic:'👩‍⚕️', d:'Médicos, enfermeiros, dentistas e demais profissionais — CNS, CBO, conselho e unidades em que atendem.'},
     {id:'locais', r:'Outras Entidades (Destinos)', ic:'🏢', d:'Hospitais, clínicas, AME e serviços de referência para encaminhamentos, exames e transporte.'},
-    {id:'enderecos', r:'Bairros e Logradouros', ic:'🗺️', d:'Bairros e ruas do município, usados no cadastro de pacientes e nos relatórios por região.'},
+    {id:'funcionarios', r:'Funcionários', ic:'🧑‍💼', d:'Todos os funcionários das unidades (recepção, motoristas, administrativo...). Quem tem cargo MOTORISTA aparece no Transporte.'},
+    {id:'mantenedores', r:'Mantenedores', ic:'🏦', d:'Quem mantém as unidades de saúde (prefeitura, consórcio, entidade filantrópica...).'},
+    {id:'enderecos', r:'Bairros, Ruas e Municípios', ic:'🗺️', d:'Bairros, logradouros, tipos de logradouro e municípios (lista oficial do IBGE), usados nos endereços e no BPA.'},
   ]},
-  {g:'2. Pacientes', ic:'🧑‍🤝‍🧑', itens:[
+  {g:'2. Importar e Exportar Dados', ic:'📥', itens:[
+    {id:'importacao', r:'Importar de Outros Sistemas', ic:'📥', admin:true, d:'Traga pacientes, profissionais, unidades, funcionários, CBO, bairros, ruas, municípios, destinos, medicamentos e exames do Fiorilli SIS, e-SUS, CNES ou de planilhas — sem duplicar o que já existe.'},
+    {id:'exportarDados', r:'Exportar Tabelas', ic:'📤', admin:true, d:'Tire qualquer tabela do sistema em Excel ou JSON — para conferir, para outro sistema ou para prestar contas.'},
+    {id:'backup', r:'Cópia de Segurança', ic:'💾', admin:true, d:'Exporte todos os dados para um arquivo e restaure quando precisar.'},
+  ]},
+  {g:'3. Utilitários', ic:'🧰', itens:[
+    {id:'usuarios', r:'Usuários', ic:'👤', admin:true, d:'Cadastre quem usa o sistema, o perfil, a unidade e o profissional de cada um; libere os pedidos de acesso.'},
+    {id:'perfis', r:'Perfis de Acesso', ic:'🛡️', admin:true, d:'O que cada perfil vê e pode alterar em cada tela, e quem acessa dados clínicos.'},
+    {id:'recados', r:'Recados', ic:'✉️', todos:2, d:'Recados entre os usuários do sistema: aparecem para o destinatário quando ele entra.'},
+    {id:'logAcesso', r:'Registro de Acessos', ic:'📜', admin:true, d:'Quem entrou, quando e o que fez — inclusive quais prontuários abriu (LGPD).'},
+    {id:'unificarProfissionais', r:'Unificar Profissionais', ic:'🔗', admin:true, d:'Junte cadastros repetidos do mesmo profissional (ex.: depois de importar) sem perder agenda, atendimentos e produção.'},
+    {id:'seguranca', r:'Segurança e Banco', ic:'🔒', admin:true, d:'Regras do banco de dados, permissões e uso do armazenamento.'},
+  ]},
+  {g:'4. Sistema e Ajuda', ic:'❔', itens:[
+    {id:'sessao', r:'Conexão, Senha e Usuário', ic:'🔌', todos:1, d:'Situação da conexão com a nuvem, seus dados de acesso, trocar a senha e trocar de usuário.'},
+    {id:'sobre', r:'Ajuda e Sobre', ic:'❔', todos:1, d:'Versão do sistema, novidades de cada versão, módulos instalados e dicas de uso.'},
+  ]},
+  /* ---- MÓDULO AMBULATÓRIO (SIS_AMB) ---- */
+  {g:'Visão Geral', ic:'📊', itens:[
+    {id:'painel', r:'Painel do dia', ic:'📊', d:'Resumo do dia: fila de atendimento, agenda, alertas dos programas de saúde e indicadores do mês.'},
+  ]},
+  {g:'1. Pacientes', ic:'🧑‍🤝‍🧑', itens:[
     {id:'pacientes', r:'Pacientes', ic:'🧑', d:'Cadastro completo dos pacientes (dados pessoais, endereço, documentos, programas, foto e anexos).'},
     {id:'prontuario', r:'Prontuário', ic:'📚', d:'Histórico completo do paciente: atendimentos, triagens, consultas, receitas, exames, vacinas, encaminhamentos e mais.'},
     {id:'familias', r:'Famílias e Domicílios', ic:'🏠', d:'Composição familiar por segmento/área/microárea/família e dados de moradia e saneamento.'},
     {id:'unificar', r:'Unificar Duplicados', ic:'🔗', d:'Encontre cadastros repetidos do mesmo paciente e una os dois sem perder nenhum atendimento.'},
     {id:'importarPacientes', r:'Importar Pacientes', ic:'⭱', d:'Traga os pacientes do SIS (Fiorilli), CADSUS ou de uma planilha (Excel/CSV), sem duplicar quem já existe.'},
   ]},
-  {g:'3. Agendamento', ic:'📅', itens:[
+  {g:'2. Agendamento', ic:'📅', itens:[
     {id:'agenda', r:'Agendamento de Consultas', ic:'📅', d:'Agenda de cada profissional: vagas livres, marcação, remarcação, confirmação, faltas e encaixes.'},
     {id:'listaEspera', r:'Lista de Espera', ic:'⏳', d:'Pacientes aguardando vaga por especialidade/procedimento, por prioridade e data de inclusão.'},
     {id:'agendaExames', r:'Agendamento de Exames', ic:'🧪', d:'Exames marcados em laboratórios e clínicas, com preparo e aviso ao paciente.'},
     {id:'vagas', r:'Lançamento de Vagas', ic:'🗓️', d:'Escalas dos profissionais: dias da semana, horários, intervalo e tipo de vaga — base da agenda.'},
     {id:'ausencias', r:'Ausências e Feriados', ic:'🚫', d:'Férias, licenças e faltas dos profissionais e feriados — bloqueiam a agenda nesses dias.'},
   ]},
-  {g:'4. Atendimento', ic:'🩺', itens:[
+  {g:'3. Atendimento', ic:'🩺', itens:[
     {id:'recepcao', r:'Recepção', ic:'🛎️', d:'Chegada dos pacientes: abertura da Ficha de Atendimento (F.A.), agendados do dia e fila da unidade.'},
     {id:'triagem', r:'Acolhimento / Triagem', ic:'🌡️', d:'Pré-consulta: sinais vitais, classificação de risco, queixa principal e procedimentos de enfermagem.'},
     {id:'consultorio', r:'Consultório', ic:'🩺', d:'Atendimento do profissional: anamnese, exame, CID, procedimentos, receita, exames, atestados e encaminhamentos.'},
@@ -1183,41 +1217,33 @@ const MENU = [
     {id:'producao', r:'Produção Diária', ic:'📋', d:'Procedimentos de enfermagem e coletivos lançados em lote (sem ficha individual).'},
     {id:'painelChamada', r:'Painel de Chamada (TV)', ic:'📺', d:'Tela para a TV da sala de espera: mostra e fala o nome do paciente chamado.'},
   ]},
-  {g:'5. Programas de Saúde', ic:'❤️', itens:[
+  {g:'4. Programas de Saúde', ic:'❤️', itens:[
     {id:'hiperdia', r:'Hiperdia', ic:'❤️', d:'Acompanhamento de hipertensos e diabéticos: cadastro, consultas, PA, glicemia e retornos em atraso.'},
     {id:'prenatal', r:'Gestantes / Pré-Natal', ic:'🤰', d:'Gestações, idade gestacional, DPP, consultas de pré-natal, risco e desfecho.'},
     {id:'examesExternos', r:'Exames de Outras Entidades', ic:'📄', d:'Resultados de exames feitos fora da rede municipal, para constar no prontuário.'},
     {id:'vigilancia', r:'Vigilância Epidemiológica', ic:'🦟', d:'Notificações de agravos (dengue, IST, tuberculose...), situação, SINAN e estatísticas por bairro.'},
     {id:'zoonoses', r:'Controle de Zoonoses', ic:'🐕', d:'Animais (cães e gatos) por tutor e vacinação antirrábica.'},
   ]},
-  {g:'6. Vacinas', ic:'💉', itens:[
+  {g:'5. Vacinas', ic:'💉', itens:[
     {id:'vacinacao', r:'Vacinação', ic:'💉', d:'Aplicação de vacinas, cartão de vacina digital do paciente e registro de doses de outros locais.'},
     {id:'agendaVacinas', r:'Próximas Doses e Atrasos', ic:'⏰', d:'Pacientes com dose marcada ou em atraso, com telefone para busca ativa.'},
     {id:'campanhas', r:'Campanhas', ic:'📣', d:'Campanhas de vacinação, período e público-alvo.'},
     {id:'calendarioVacinal', r:'Calendário de Vacinação', ic:'🗒️', d:'Idades, vacinas e doses do calendário — usado para apontar doses pendentes no cartão.'},
   ]},
-  {g:'7. Encaminhamentos', ic:'↗️', itens:[
+  {g:'6. Encaminhamentos', ic:'↗️', itens:[
     {id:'encaminhamentos', r:'Guias de Encaminhamento', ic:'↗️', d:'Referência para especialidades, exames, cirurgias e TFD, com status, histórico e aviso ao paciente.'},
     {id:'cotas', r:'Locais e Vagas (Cotas)', ic:'🎯', d:'Cotas mensais por local e especialidade/procedimento e quanto já foi usado.'},
   ]},
-  {g:'8. Transportes', ic:'🚐', itens:[
+  {g:'7. Transportes', ic:'🚐', itens:[
     {id:'agendaTransporte', r:'Agendamento de Transporte', ic:'🧳', d:'Pacientes e acompanhantes que viajam para tratamento fora do município.'},
     {id:'viagens', r:'Controle de Viagens', ic:'🚐', d:'Viagens: veículo, motorista, passageiros, quilometragem e prestação de contas.'},
   ]},
-  {g:'9. Relatórios', ic:'📈', itens:[
+  {g:'8. Relatórios', ic:'📈', itens:[
     {id:'relatorios', r:'Relatórios', ic:'📈', d:'Todos os relatórios do ambulatório: atendimentos, CID, profissionais, procedimentos, agenda, vacinas e mais.'},
     {id:'bpa', r:'Produção (BPA)', ic:'💵', d:'Produção ambulatorial por competência — consolidada (BPA-C) e individualizada (BPA-I) — para conferência e digitação.'},
   ]},
-  {g:'10. Tabelas', ic:'📚', itens:[
+  {g:'9. Tabelas', ic:'📚', itens:[
     {id:'tabelas', r:'Tabelas do Sistema', ic:'📚', d:'Especialidades (CBO), CID-10, procedimentos (SIGTAP), medicamentos, tipos, status, vacinas e demais tabelas.'},
-  ]},
-  {g:'11. Administração', ic:'🔐', itens:[
-    {id:'usuarios', r:'Usuários', ic:'👤', admin:true, d:'Cadastre quem usa o sistema, o perfil, a unidade e o profissional de cada um; libere os pedidos de acesso.'},
-    {id:'perfis', r:'Perfis de Acesso', ic:'🛡️', admin:true, d:'O que cada perfil vê e pode alterar em cada tela, e quem acessa dados clínicos.'},
-    {id:'logAcesso', r:'Registro de Acessos', ic:'📜', admin:true, d:'Quem entrou, quando e o que fez — inclusive quais prontuários abriu (LGPD).'},
-    {id:'modulos', r:'Módulos do Sistema', ic:'🧩', d:'Módulos instalados, módulos planejados e ligação com os outros aplicativos da Secretaria.'},
-    {id:'seguranca', r:'Segurança e Banco', ic:'🔒', admin:true, d:'Regras do banco de dados, permissões e uso do armazenamento.'},
-    {id:'backup', r:'Cópia de Segurança', ic:'💾', admin:true, d:'Exporte todos os dados para um arquivo e restaure quando precisar.'},
   ]},
 ];
 const MENU_ITENS = {}; MENU.forEach(g=>g.itens.forEach(it=>{ it.grupo=g.g; MENU_ITENS[it.id]=it; }));
@@ -1225,12 +1251,12 @@ const VIEWS = {}; const POS_RENDER = {};
 
 const PERFIS_PADRAO = [
   {id:'admin', nome:'Administrador', admin:true, clinico:true, perm:'*2', fixo:true},
-  {id:'recepcao', nome:'Recepção', clinico:false, perm:{painel:1,pacientes:2,familias:1,agenda:2,listaEspera:2,agendaExames:2,vagas:1,ausencias:1,recepcao:2,fichas:2,painelChamada:1,encaminhamentos:1,agendaTransporte:2,viagens:1,vacinacao:1,agendaVacinas:1,relatorios:1,modulos:1,unidades:1,profissionais:1,locais:1,enderecos:2,tabelas:1}},
+  {id:'recepcao', nome:'Recepção', clinico:false, perm:{painel:1,pacientes:2,familias:1,agenda:2,listaEspera:2,agendaExames:2,vagas:1,ausencias:1,recepcao:2,fichas:2,painelChamada:1,encaminhamentos:1,agendaTransporte:2,viagens:1,vacinacao:1,agendaVacinas:1,relatorios:1,modulos:1,unidades:1,profissionais:1,locais:1,enderecos:2,tabelas:1,funcionarios:1}},
   {id:'enfermagem', nome:'Enfermagem', clinico:true, perm:{painel:1,pacientes:2,prontuario:1,familias:1,agenda:2,listaEspera:2,recepcao:2,triagem:2,consultorio:2,posConsulta:2,observacao:2,fichas:2,sadt:2,producao:2,painelChamada:1,hiperdia:2,prenatal:2,examesExternos:2,vigilancia:2,zoonoses:1,vacinacao:2,agendaVacinas:2,campanhas:2,calendarioVacinal:1,encaminhamentos:1,relatorios:1,modulos:1,tabelas:1,unidades:1,profissionais:1,locais:1,enderecos:1}},
   {id:'medico', nome:'Médico / Profissional de saúde', clinico:true, perm:{painel:1,pacientes:2,prontuario:1,familias:1,agenda:1,listaEspera:2,recepcao:1,triagem:2,consultorio:2,posConsulta:2,observacao:2,fichas:1,sadt:2,painelChamada:1,hiperdia:2,prenatal:2,examesExternos:2,vigilancia:2,vacinacao:1,agendaVacinas:1,encaminhamentos:2,relatorios:1,modulos:1,tabelas:1,unidades:1,profissionais:1,locais:1}},
   {id:'faturamento', nome:'Digitador / Faturamento', clinico:true, perm:{painel:1,pacientes:2,prontuario:1,recepcao:1,fichas:2,posConsulta:2,sadt:2,producao:2,relatorios:1,bpa:2,tabelas:2,unidades:1,profissionais:2,locais:1,enderecos:2,modulos:1,encaminhamentos:1,agenda:1,vacinacao:1,importarPacientes:2,unificar:2}},
-  {id:'regulacao', nome:'Regulação / Agendamento', clinico:false, perm:{painel:1,pacientes:2,familias:1,agenda:2,listaEspera:2,agendaExames:2,vagas:2,ausencias:2,encaminhamentos:2,cotas:2,agendaTransporte:2,viagens:1,relatorios:1,recepcao:1,locais:2,unidades:1,profissionais:1,modulos:1,tabelas:1}},
-  {id:'transporte', nome:'Transporte', clinico:false, perm:{painel:1,pacientes:1,agendaTransporte:2,viagens:2,relatorios:1,modulos:1,tabelas:1}},
+  {id:'regulacao', nome:'Regulação / Agendamento', clinico:false, perm:{painel:1,pacientes:2,familias:1,agenda:2,listaEspera:2,agendaExames:2,vagas:2,ausencias:2,encaminhamentos:2,cotas:2,agendaTransporte:2,viagens:1,relatorios:1,recepcao:1,locais:2,unidades:1,profissionais:1,modulos:1,tabelas:1,funcionarios:1}},
+  {id:'transporte', nome:'Transporte', clinico:false, perm:{painel:1,pacientes:1,agendaTransporte:2,viagens:2,relatorios:1,modulos:1,tabelas:1,funcionarios:1}},
   {id:'vacinas', nome:'Sala de Vacina', clinico:false, perm:{painel:1,pacientes:2,vacinacao:2,agendaVacinas:2,campanhas:2,calendarioVacinal:2,zoonoses:2,relatorios:1,modulos:1,tabelas:1}},
   {id:'consulta', nome:'Consulta (somente leitura)', clinico:false, perm:'*1'},
   {id:'tv', nome:'Painel de chamada (TV)', clinico:false, perm:{painelChamada:1}},
@@ -1253,9 +1279,10 @@ function nivel(view){
   if(MODO_DEMO) return 2;
   if(!PERFIL) return 0;
   const p=PERFIL.perm;
-  if(p==='*2') return 2;
-  if(p==='*1') return 1;
-  return Number((p||{})[view]||0);
+  const base = p==='*2' ? 2 : p==='*1' ? 1 : Number((p||{})[view]||0);
+  /* telas de uso geral (painel geral, recados, sistema e ajuda) valem para todos, menos o perfil da TV */
+  if(it && it.todos && PERFIL.id!=='tv') return Math.max(base, it.todos);
+  return base;
 }
 function pode(view){ return nivel(view||currentView)>=2; }
 function podeVer(view){ return nivel(view||currentView)>=1; }
@@ -1591,6 +1618,7 @@ async function iniciarSessao(u){
   goto(MENU_ITENS[v] && podeVer(v) ? v : primeiraTelaPermitida());
   if(isAdmin() && !MODO_DEMO) verificarPedidosAcesso();
   if(PERFIS_MIGRADOS && isAdmin() && !MODO_DEMO){ PERFIS_MIGRADOS=false; gravarUsuariosEAcl().catch(e=>console.warn('perfis', e)); }
+  if(typeof recadosAoEntrar==='function') setTimeout(recadosAoEntrar, 1500);
 }
 function primeiraTelaPermitida(){ for(const g of MENU) for(const it of g.itens) if(podeVer(it.id)) return it.id; return 'painel'; }
 async function carregarTudo(){
@@ -1677,7 +1705,7 @@ let navBusca='', navAbertos=null;
 function navAbertosSet(){
   if(navAbertos) return navAbertos;
   try{ const s=JSON.parse(localStorage.getItem(NAV_ABERTOS_KEY)||'null'); if(Array.isArray(s)) navAbertos=new Set(s); }catch(e){}
-  if(!navAbertos){ navAbertos=new Set(['Visão Geral','4. Atendimento']); }
+  if(!navAbertos){ navAbertos=new Set(['Visão Geral','3. Atendimento','1. Cadastros']); }
   return navAbertos;
 }
 function toggleNavGrupo(g){ const a=navAbertosSet(); if(a.has(g)) a.delete(g); else a.add(g); try{ localStorage.setItem(NAV_ABERTOS_KEY, JSON.stringify([...a])); }catch(e){} renderNav(); }
@@ -1689,15 +1717,18 @@ function navBadge(id){
     if(id==='consultorio'){ const p=USUARIO&&USUARIO.profissionalId; return filaDoDia().filter(a=>(a.status==='aguardandoAtendimento'||(a.status==='aguardando'&&!a.triagemObrigatoria)) && (!p||a.profissionalId===p)).length; }
     if(id==='observacao') return lista('atendimentos').filter(a=>a.status==='observacao').length;
     if(id==='usuarios') return PEDIDOS_ACESSO.length;
+    if(id==='recados' && typeof recadosNaoLidos==='function') return recadosNaoLidos();
     if(typeof labBadge==='function' && /^lab/.test(id)) return labBadge(id);
   }catch(e){}
   return 0;
 }
 /* Módulos do menu: cada módulo do sistema reúne os seus grupos de telas e abre/fecha com um
-   clique. O Ambulatório está aqui; os outros (Laboratório em p10, Farmácia...) entram com
+   clique. O MÓDULO MENU (cadastros comuns, importação, utilitários) e o Ambulatório estão aqui; os outros (Laboratório em p10, Farmácia...) entram com
    MODULOS_MENU.push(...) e a lista dos grupos deles. */
+const GRUPOS_MODULO_MENU=['Visão Geral do Sistema','1. Cadastros','2. Importar e Exportar Dados','3. Utilitários','4. Sistema e Ajuda'];
 const MODULOS_MENU=[
-  {id:'amb', nome:'MÓDULO AMBULATÓRIO', ic:'🩺', grupos:MENU.map(g=>g.g), badges:['recepcao','usuarios']},
+  {id:'menu', nome:'MÓDULO MENU', ic:'🧭', grupos:GRUPOS_MODULO_MENU, badges:['usuarios','recados']},
+  {id:'amb', nome:'MÓDULO AMBULATÓRIO', ic:'🩺', grupos:MENU.map(g=>g.g).filter(g=>!GRUPOS_MODULO_MENU.includes(g)), badges:['recepcao']},
 ];
 const NAV_MODULOS_KEY='pis_nav_modulos';
 let navModAbertos=null;
@@ -2035,6 +2066,7 @@ const CADS = {
     {k:'cnes', r:'CNES', obr:true, dica:'7 dígitos'},
     {k:'tipo', r:'Tipo', t:'sel', op:['UNIDADE BÁSICA DE SAÚDE','ESTRATÉGIA SAÚDE DA FAMÍLIA','PRONTO ATENDIMENTO','CENTRO DE ESPECIALIDADES','CAPS','CENTRO DE REABILITAÇÃO','POLICLÍNICA','HOSPITAL','LABORATÓRIO','CENTRAL DE REGULAÇÃO','VIGILÂNCIA EM SAÚDE','OUTRO']},
     {k:'razao', r:'Razão social / mantenedora', w:2}, {k:'cnpj', r:'CNPJ'}, {k:'telefone', r:'Telefone', t:'tel'},
+    {k:'mantenedorId', r:'Mantenedor (cadastro de Mantenedores)', t:'ref', tab:'mantenedores', w:2}, {k:'ibge', r:'Código IBGE do município', dica:'Em branco = o da entidade'},
     {k:'endereco', r:'Endereço', w:2}, {k:'numero', r:'Número'}, {k:'bairro', r:'Bairro'},
     {k:'responsavel', r:'Responsável técnico', w:2}, {k:'horario', r:'Horário de funcionamento', ph:'Ex.: 07:00 às 17:00', w:2},
     {k:'usaTriagem', r:'Pacientes passam pela triagem antes da consulta', t:'sim', padrao:true, w:2},
@@ -2061,7 +2093,7 @@ const CADS = {
     {k:'distanciaKm', r:'Distância (km)', t:'num'}, {k:'obs', r:'Observações', t:'area', w:4}, {k:'ativo', r:'Ativo', t:'sim', padrao:true},
   ], cols:[['nome','Nome'],['tipo','Tipo'],['municipio','Município'],['uf','UF'],['telefone','Telefone'],['distanciaKm','km'],['ativo','Situação']], busca:['nome','municipio','tipo'], importar:true},
   bairros:{tab:'bairros', titulo:'Bairros', campos:[{k:'nome', r:'Bairro', obr:true, w:2, maiusc:true, unico:true},{k:'zona', r:'Zona', t:'sel', op:['URBANA','RURAL']},{k:'area', r:'Área (ESF)'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Bairro'],['zona','Zona'],['area','Área'],['ativo','Situação']], busca:['nome'], importar:true},
-  logradouros:{tab:'logradouros', titulo:'Logradouros', campos:[{k:'tipo', r:'Tipo', t:'sel', op:['RUA','AVENIDA','TRAVESSA','ALAMEDA','PRAÇA','ESTRADA','RODOVIA','SÍTIO','FAZENDA','CHÁCARA','VIELA','OUTRO']},{k:'nome', r:'Nome', obr:true, w:2, maiusc:true},{k:'bairro', r:'Bairro', lista:'dlBairros'},{k:'cep', r:'CEP', t:'cep'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['tipo','Tipo'],['nome','Logradouro'],['bairro','Bairro'],['cep','CEP']], busca:['nome','bairro','cep'], importar:true},
+  logradouros:{tab:'logradouros', titulo:'Logradouros', campos:[{k:'tipo', r:'Tipo', t:'sel', op:()=>{ const t=ativos('tiposLogradouro').map(x=>x.nome); return t.length?t:['RUA','AVENIDA','TRAVESSA','ALAMEDA','PRAÇA','ESTRADA','RODOVIA','SÍTIO','FAZENDA','CHÁCARA','VIELA','OUTRO']; }},{k:'nome', r:'Nome', obr:true, w:2, maiusc:true},{k:'bairro', r:'Bairro', lista:'dlBairros'},{k:'cep', r:'CEP', t:'cep'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['tipo','Tipo'],['nome','Logradouro'],['bairro','Bairro'],['cep','CEP']], busca:['nome','bairro','cep'], importar:true},
   especialidades:{tab:'especialidades', titulo:'Especialidades (CBO)', grupo:'SIA-SUS', campos:[{k:'cbo', r:'CBO', obr:true, unico:true},{k:'nome', r:'Especialidade / ocupação', obr:true, w:3, maiusc:true},{k:'ativo', r:'Ativa', t:'sim', padrao:true}], cols:[['cbo','CBO'],['nome','Especialidade'],['ativo','Situação']], busca:['cbo','nome'], importar:true},
   tiposAtendimento:{tab:'tiposAtendimento', titulo:'Tipos de Atendimento', grupo:'SIA-SUS', campos:[{k:'nome', r:'Tipo de atendimento', obr:true, w:3, maiusc:true, unico:true},{k:'carater', r:'Caráter (BPA)', t:'sel', op:CARATER_ATEND, padrao:'01'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Tipo'],['carater','Caráter'],['ativo','Situação']], busca:['nome']},
   tiposFicha:{tab:'tiposFicha', titulo:'Tipos de Ficha (F.A.)', grupo:'SIA-SUS', campos:[{k:'nome', r:'Tipo de ficha', obr:true, w:3, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Tipo de ficha'],['ativo','Situação']], busca:['nome']},
@@ -4682,11 +4714,11 @@ const APPS_SECRETARIA=[
   ['🛒','Controle de Cotações','https://joaoalbertobuenovilchi.github.io/controle-cotacoes/'],
   ['🗣️','Audiências Públicas da Saúde','https://joaoalbertobuenovilchi.github.io/audiencias-saude/'],
 ];
-const GRUPOS_OPCIONAIS=['5. Programas de Saúde','6. Vacinas','7. Encaminhamentos','8. Transportes'];
+const GRUPOS_OPCIONAIS=['4. Programas de Saúde','5. Vacinas','6. Encaminhamentos','7. Transportes'];
 VIEWS.modulos=()=>{
   const ocultos=new Set(cfgGeral().modulosOcultos||[]);
   return `<div class="card"><h2>🧩 Programa Integral de Saúde — um sistema, vários módulos</h2><div class="subtitle">Todos os módulos usam os mesmos <b>cadastros gerais</b> (entidade, unidades, profissionais, pacientes), os mesmos <b>usuários e perfis</b> e o mesmo banco. Assim, um paciente cadastrado na recepção aparece na farmácia, no laboratório e no hospital sem digitar de novo.</div>
-    <div class="grid cols-3"><div class="stat"><div class="label">Módulos instalados</div><div class="value" style="font-size:17px;">🩺 Ambulatório · 🧪 Laboratório</div><div class="hint">v. ${appVersao()} — equivalentes ao SIS_AMB e ao SIS_LABO</div></div><div class="stat azul"><div class="label">Telas disponíveis</div><div class="value">${Object.keys(MENU_ITENS).length}</div></div><div class="stat roxo"><div class="label">Tabelas de dados</div><div class="value">${Object.keys(TABELAS).length}</div></div></div></div>
+    <div class="grid cols-3"><div class="stat"><div class="label">Módulos instalados</div><div class="value" style="font-size:17px;">🧭 Menu · 🩺 Ambulatório · 🧪 Laboratório</div><div class="hint">v. ${appVersao()} — equivalentes ao SIS_MENU, SIS_AMB e SIS_LABO</div></div><div class="stat azul"><div class="label">Telas disponíveis</div><div class="value">${Object.keys(MENU_ITENS).length}</div></div><div class="stat roxo"><div class="label">Tabelas de dados</div><div class="value">${Object.keys(TABELAS).length}</div></div></div></div>
   ${isAdmin()?`<div class="card"><h2>Partes do Ambulatório em uso</h2><div class="subtitle">Desligue os grupos que o município não usa — eles somem do menu de todos (os dados ficam guardados e voltam ao religar).</div><div class="checks">${GRUPOS_OPCIONAIS.map(g=>{ const ids=(MENU.find(x=>x.g===g)||{itens:[]}).itens.map(i=>i.id); const on=!ids.every(i=>ocultos.has(i)); return `<label class="check"><input type="checkbox" ${on?'checked':''} onchange="moduloGrupo('${escJs(g)}',this.checked)"> ${esc(g)}</label>`; }).join('')}<label class="check"><input type="checkbox" ${!ocultos.has('zoonoses')?'checked':''} onchange="moduloItem('zoonoses',this.checked)"> Controle de Zoonoses</label></div></div>`:''}
   ${isAdmin()&&typeof LAB_VIEWS!=='undefined'?`<div class="card"><h2>🧪 Módulo Laboratório</h2><div class="subtitle">Requisição, coleta com etiqueta de código de barras, mapa de trabalho, digitação e liberação de resultados, laudos, laboratório de apoio, integração com equipamentos e relatórios. Desligue se o município não tem laboratório próprio (os dados ficam guardados).</div><label class="check"><input type="checkbox" ${!LAB_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloLab(this.checked)"> Módulo Laboratório em uso</label></div>`:''}
   <div class="card"><h2>Próximos módulos planejados</h2><div class="grid cols-2">${MODULOS_PLANEJADOS.map(m=>`<div style="border:1px dashed var(--line);border-radius:10px;padding:12px;"><div style="font-weight:700;">${m[0]} ${esc(m[1])} <span class="badge cinza">planejado</span></div><div class="small muted" style="margin-top:4px;line-height:1.5;">${esc(m[2])}</div></div>`).join('')}</div></div>
@@ -5987,12 +6019,8 @@ SEED_EXTRAS.especialidadesLab=async function(){
    em branco. Cada importação fica no histórico e pode ser desfeita
    (só apaga o que ela criou e que ninguém usou nem alterou depois).
    ============================================================ */
-(function(){
-  const g=MENU.find(x=>x.g==='1. Cadastros Gerais'); if(!g) return;
-  const it={id:'importacao', r:'Importar de Outros Sistemas', ic:'📥', admin:true, d:'Traga pacientes, profissionais, unidades, CBO, bairros, ruas, destinos, medicamentos e exames do Fiorilli SIS, e-SUS, CNES ou de planilhas — sem duplicar o que já existe.'};
-  g.itens.splice(1,0,it); it.grupo=g.g; MENU_ITENS[it.id]=it;
-  const ip=MENU_ITENS.importarPacientes; if(ip) ip.d='Traga os pacientes do Fiorilli SIS, e-SUS (XML), CADSUS ou de planilhas, sem duplicar quem já existe.';
-})();
+/* A tela "importacao" fica no MÓDULO MENU › 2. Importar e Exportar Dados (MENU em p2) */
+(function(){ const ip=MENU_ITENS.importarPacientes; if(ip) ip.d='Traga os pacientes do Fiorilli SIS, e-SUS (XML), CADSUS ou de planilhas, sem duplicar quem já existe.'; })();
 
 /* ---------------- Conversões ---------------- */
 function impCompacto(s){ return norm(s).replace(/[^A-Z0-9]/g,''); }
@@ -6180,7 +6208,7 @@ const IMP_ALVOS={
   logradouros:{titulo:'Ruas (logradouros)', ic:'🛣️', tab:'logradouros', view:'enderecos', ordem:7, xml:/logradouro|rua|^ROW$/i, dica:'Chave: tipo + nome.',
     campos:[{k:'tipo', r:'Tipo', t:'maiusc', sin:['TIPO','TIPO_LOGRADOURO','TP_LOGRADOURO','TIPOLOGRADOURO']},{k:'nome', r:'Logradouro', t:'maiusc', obr:true, sin:['LOGRADOURO','NOME','RUA','ENDERECO','DESCRICAO','NO_LOGRADOURO','DE_LOGRADOURO','NOMELOGRADOURO']},{k:'bairro', r:'Bairro', t:'maiusc', sin:['BAIRRO','NO_BAIRRO']},{k:'cep', r:'CEP', t:'cep', sin:['CEP','NU_CEP']}],
     chaves:r=>[r.nome&&'log:'+norm(r.tipo||'')+'|'+norm(r.nome)],
-    montar(r){ const op=CADS.logradouros.campos.find(c=>c.k==='tipo').op; const ab={'R':'RUA','R.':'RUA','AV':'AVENIDA','AV.':'AVENIDA','TV':'TRAVESSA','TV.':'TRAVESSA','AL':'ALAMEDA','PC':'PRAÇA','PCA':'PRAÇA','PRACA':'PRAÇA','EST':'ESTRADA','ROD':'RODOVIA'};
+    montar(r){ const op0=CADS.logradouros.campos.find(c=>c.k==='tipo').op; const op=typeof op0==='function'?op0():op0; const ab={'R':'RUA','R.':'RUA','AV':'AVENIDA','AV.':'AVENIDA','TV':'TRAVESSA','TV.':'TRAVESSA','AL':'ALAMEDA','PC':'PRAÇA','PCA':'PRAÇA','PRACA':'PRAÇA','EST':'ESTRADA','ROD':'RODOVIA'};
       if(r.tipo){ const t=norm(r.tipo); r.tipo=op.find(o=>norm(o)===t)||ab[t]||ab[t+'.']||'OUTRO'; }
       else { const m=String(r.nome).match(/^(RUA|R\.|AVENIDA|AV\.?|TRAVESSA|TV\.?|ALAMEDA|PRA[CÇ]A|ESTRADA|RODOVIA)\s+(.+)$/i); if(m){ const t=norm(m[1]).replace(/\.$/,''); r.tipo=op.find(o=>norm(o)===t)||ab[t]||'OUTRO'; r.nome=m[2].trim(); } }
       r.ativo=true; },
@@ -6364,9 +6392,10 @@ async function impExecutar(){
   const prog=document.getElementById('impProg'); const bar=t=>{ if(prog) prog.innerHTML=`<div class="progress"><div style="width:${t[0]}%"></div></div><div class="small muted">${esc(t[1])}</div>`; };
   try{
     for(const t of Object.keys(an.aux)){ bar([5,'Criando '+impNomeTab(t)+'…']); await salvarLote(t, an.aux[t].map(r=>Object.assign({}, r, {importacao:impId}))); }
-    novos.forEach(r=>{ r.importacao=impId; });
+    novos.forEach(r=>{ r.importacao=impId; if(!r.id) r.id=uid(); });
     if(a.preparar){ bar([10,'Preparando…']); await a.preparar(novos, {usarMatricula:IMPX.usarMatricula}); }
     await salvarLote(a.tab, novos.concat(comp), (f,t)=>bar([10+Math.round(f/t*88), fmtNum(f)+' de '+fmtNum(t)+' gravado(s)…']));
+    if(a.depois) await a.depois(novos.concat(comp));
     const cont=an.cont;
     salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo:IMPX.alvo, fonte:IMPX.fonte, arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, existentes:cont.existe||0, repetidos:cont.repetido||0, invalidos:cont.invalido||0, aux:Object.fromEntries(Object.keys(an.aux).map(t=>[t, an.aux[t].length]))});
     registrarAcao(`Importou ${novos.length} ${a.titulo.toLowerCase()} (e completou ${comp.length}) de ${arquivos}`);
@@ -6418,6 +6447,7 @@ async function impDesfazer(id){
 /* ---------------- Tela ---------------- */
 function impFmtPrev(a, k, r){
   const v=r[k]; if(impVazio(v)) return '';
+  if(k==='unidadeId') return nomeDe('unidades',v);
   if(k==='nascimento') return fmtData(v); if(k==='cns') return fmtCNS(v); if(k==='cpf') return fmtCPF(v);
   if(k==='especialidadeId'){ const e=obter('especialidades',v)||[...((IMPX.an&&IMPX.an.aux.especialidades)||[])].find(x=>x.id===v); return e?(e.cbo+' '+e.nome):''; }
   if(k==='unidades') return v.map(id=>{ const u=obter('unidades',id)||((IMPX.an&&IMPX.an.aux.unidades)||[]).find(x=>x.id===id); return u?u.nome:''; }).join(', ');
@@ -6481,6 +6511,353 @@ function importarAbrir(cadId){
   if(alvo && isAdmin()){ IMPX.alvo=alvo; IMPX.resultado=null; impResetDados(); goto('importacao'); return; }
   cadImportarAbrir(cadId);
 }
+
+
+/* ============================================================
+   MÓDULO MENU (equivalente ao SIS_MENU da Fiorilli)
+   Cadastros comuns a todos os módulos (entidade, unidades,
+   profissionais, outras entidades, funcionários, mantenedores,
+   bairros/ruas/municípios), importação e exportação de dados,
+   utilitários (usuários, perfis, recados, log, unificar
+   profissionais, segurança) e sistema/ajuda. O menu fica em p2
+   (grupos de GRUPOS_MODULO_MENU); aqui ficam as telas novas.
+   ============================================================ */
+
+/* ---------------- Cadastros novos ---------------- */
+Object.assign(CADS, {
+  funcionarios:{tab:'funcionarios', titulo:'Funcionários', view:'funcionarios', importar:true,
+    ajuda:'Como no SIS: quem tiver o cargo <b>MOTORISTA</b> passa a aparecer também em Transportes (escolha do motorista da viagem), com a CNH informada aqui.',
+    campos:[
+      {k:'nome', r:'Nome completo', obr:true, w:2, maiusc:true},
+      {k:'cargo', r:'Cargo / função', obr:true, maiusc:true, lista:'dlCargos'},
+      {k:'unidadeId', r:'Unidade de lotação', t:'ref', tab:'unidades'},
+      {k:'matricula', r:'Matrícula funcional'}, {k:'cpf', r:'CPF', t:'cpf'}, {k:'admissao', r:'Admissão', t:'data'},
+      {k:'telefone', r:'Telefone', t:'tel'}, {k:'email', r:'E-mail', t:'email'},
+      {k:'cnh', r:'CNH (motoristas)'}, {k:'categoriaCnh', r:'Categoria da CNH', t:'sel', op:['A','B','C','D','E','AB','AC','AD','AE']}, {k:'validadeCnh', r:'Validade da CNH', t:'data'},
+      {k:'obs', r:'Observações', t:'area', w:4, linhas:2}, {k:'ativo', r:'Ativo', t:'sim', padrao:true},
+    ], cols:[['nome','Funcionário'],['cargo','Cargo'],['unidadeId','Unidade'],['telefone','Telefone'],['ativo','Situação']], busca:['nome','cargo','cpf','matricula']},
+  mantenedores:{tab:'mantenedores', titulo:'Mantenedores', view:'mantenedores', importar:true,
+    ajuda:'Quem sustenta/mantém a unidade de saúde (prefeitura, fundo municipal, consórcio, entidade filantrópica). Depois de cadastrar, escolha o mantenedor no cadastro de cada unidade.',
+    campos:[
+      {k:'nome', r:'Nome / razão social', obr:true, w:2, maiusc:true, unico:true}, {k:'cnpj', r:'CNPJ'},
+      {k:'esfera', r:'Esfera administrativa', t:'sel', op:['MUNICIPAL','ESTADUAL','FEDERAL','PRIVADA','FILANTRÓPICA','CONSÓRCIO']},
+      {k:'endereco', r:'Endereço', w:2}, {k:'municipio', r:'Município', maiusc:true}, {k:'uf', r:'UF', t:'uf'},
+      {k:'telefone', r:'Telefone', t:'tel'}, {k:'email', r:'E-mail', t:'email'}, {k:'ativo', r:'Ativo', t:'sim', padrao:true},
+    ], cols:[['nome','Mantenedor'],['cnpj','CNPJ'],['esfera','Esfera'],['municipio','Município'],['ativo','Situação']], busca:['nome','cnpj']},
+  tiposLogradouro:{tab:'tiposLogradouro', titulo:'Tipos de Logradouro', view:'enderecos',
+    ajuda:'Padroniza os tipos de via (Rua, Avenida...) usados no cadastro de logradouros. O código DNE é o usado pelo e-SUS.',
+    campos:[{k:'nome', r:'Tipo', obr:true, w:2, maiusc:true, unico:true},{k:'abreviatura', r:'Abreviatura', maiusc:true},{k:'codigoDNE', r:'Código DNE (e-SUS)'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}],
+    cols:[['nome','Tipo'],['abreviatura','Abreviatura'],['codigoDNE','Código DNE'],['ativo','Situação']], busca:['nome','abreviatura']},
+  municipios:{tab:'municipios', titulo:'Municípios', view:'enderecos', importar:true,
+    campos:[{k:'ibge', r:'Código IBGE', obr:true, unico:true, dica:'7 dígitos'},{k:'nome', r:'Município', obr:true, w:2, maiusc:true},{k:'uf', r:'UF', t:'uf', obr:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}],
+    cols:[['ibge','IBGE'],['nome','Município'],['uf','UF'],['ativo','Situação']], busca:['ibge','nome','uf'], ordem:r=>norm(r.uf+' '+r.nome)},
+});
+SEED.tiposLogradouro=[['RUA','R.','081'],['AVENIDA','AV.','008'],['TRAVESSA','TV.',''],['ALAMEDA','AL.',''],['PRAÇA','PÇ.',''],['ESTRADA','EST.',''],['RODOVIA','ROD.',''],['SÍTIO','',''],['FAZENDA','',''],['CHÁCARA','',''],['VIELA','',''],['OUTRO','','']].map(x=>({nome:x[0], abreviatura:x[1], codigoDNE:x[2]}));
+const CARGOS_COMUNS=['RECEPCIONISTA','AUXILIAR ADMINISTRATIVO','AGENTE ADMINISTRATIVO','ESCRITURÁRIO','MOTORISTA','SERVIÇOS GERAIS','AUXILIAR DE LIMPEZA','VIGIA','COZINHEIRA','DIGITADOR','FATURISTA','TÉCNICO DE INFORMÁTICA','ALMOXARIFE','COORDENADOR','DIRETOR','SECRETÁRIO DE SAÚDE'];
+VIEWS.funcionarios=()=>viewCad('funcionarios')+`<datalist id="dlCargos">${unicos(CARGOS_COMUNS.concat(lista('funcionarios').map(f=>f.cargo))).map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`;
+VIEWS.mantenedores=()=>viewCad('mantenedores');
+/* Funcionário com cargo MOTORISTA → cadastro de motoristas do Transporte (só cria/atualiza o vínculo) */
+function funcSincMotorista(f){
+  if(!f || !/MOTORISTA/.test(norm(f.cargo))) return;
+  const ex=lista('motoristas').find(m=>m.funcionarioId===f.id) || lista('motoristas').find(m=>!m.funcionarioId && norm(m.nome)===norm(f.nome));
+  const cat=String(f.categoriaCnh||'').slice(-1);
+  const d={nome:f.nome, funcionarioId:f.id, ativo:f.ativo!==false};
+  if(f.cnh) d.cnh=f.cnh; if(['B','C','D','E'].includes(cat)) d.categoria=cat; if(f.validadeCnh) d.validadeCnh=f.validadeCnh; if(f.telefone) d.telefone=f.telefone;
+  if(!ex){ salvar('motoristas', d); return; }
+  const m=Object.assign({}, ex, d); if(JSON.stringify(m)!==JSON.stringify(ex)) salvar('motoristas', m);
+}
+const _cadSalvarMenu=cadSalvar;
+cadSalvar=async function(cadId, id){
+  const antes=cadId==='funcionarios'?new Set(lista('funcionarios').map(r=>r.id)):null;
+  const r=await _cadSalvarMenu(cadId, id);
+  if(cadId==='funcionarios'){ const f=id?obter('funcionarios',id):lista('funcionarios').find(x=>!antes.has(x.id)); funcSincMotorista(f); }
+  return r;
+};
+
+/* ---------------- Bairros, ruas, tipos de logradouro e municípios ---------------- */
+VIEWS.enderecos=()=>{
+  const abas=[['bairros','Bairros'],['logradouros','Logradouros'],['tiposLogradouro','Tipos de Logradouro'],['municipios','Municípios']];
+  if(!abas.some(a=>a[0]===ENDERECO_ABA)) ENDERECO_ABA='bairros';
+  const ibge = ENDERECO_ABA==='municipios' ? `<div class="card"><h2>⭳ Lista oficial do IBGE</h2><div class="subtitle">Como no SIS, a tabela de municípios já pode vir pronta: baixe a lista do IBGE (precisa de internet). Os municípios que já existem não são alterados. Ela é usada para achar o código IBGE dos pacientes de outras cidades na importação (BPA).</div>
+    ${pode('enderecos')?`<div class="actions"><button class="btn" onclick="municipiosBaixarIBGE(false)">⭳ Baixar os municípios de ${esc(cfgEnt().uf||'(informe a UF em Entidade)')}</button><button class="btn secondary" onclick="municipiosBaixarIBGE(true)">⭳ Baixar todos os municípios do Brasil (5.570)</button></div>`:''}</div>` : '';
+  return `<div class="tabs">${abas.map(([k,r])=>`<div class="tab ${ENDERECO_ABA===k?'active':''}" onclick="ENDERECO_ABA='${k}';render()">${r} <span class="n">${fmtNum(lista(k).length)}</span></div>`).join('')}</div>${ibge}${viewCad(ENDERECO_ABA,{view:'enderecos'})}${datalistsEndereco()}`;
+};
+async function municipiosBaixarIBGE(todos){
+  if(semPermissao('enderecos')) return;
+  const ufs = todos ? UFS : [cfgEnt().uf].filter(Boolean);
+  if(!ufs.length){ showToast('Informe a UF da entidade em Cadastros → Entidade.','warning'); return; }
+  if(todos && !confirm('Baixar os 5.570 municípios do Brasil? (alguns segundos)')) return;
+  carregandoMsg(true,'Baixando a lista de municípios do IBGE…');
+  try{
+    const tem=new Set(lista('municipios').map(m=>soDigitos(m.ibge))); const novos=[];
+    for(const uf of ufs){
+      const r=await fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados/'+uf+'/municipios'); if(!r.ok) throw new Error('o IBGE respondeu '+r.status);
+      (await r.json()).forEach(m=>{ const c=String(m.id); if(!tem.has(c)){ tem.add(c); novos.push({ibge:c, nome:String(m.nome||'').toUpperCase(), uf, ativo:true}); } });
+    }
+    if(novos.length) await salvarLote('municipios', novos);
+    registrarAcao('Baixou '+novos.length+' município(s) do IBGE'); showToast(novos.length?fmtNum(novos.length)+' município(s) incluído(s).':'Todos os municípios já estavam cadastrados.','success');
+  }catch(e){ console.error(e); showToast('Não foi possível baixar do IBGE ('+(e.message||e)+'). Sem internet? Importe uma planilha em Importar de Outros Sistemas.','error'); }
+  finally{ carregandoMsg(false); render(true); }
+}
+function municipioIbge(nome, uf){ const n=norm(nome); if(!n) return ''; const l=lista('municipios').filter(m=>norm(m.nome)===n); const m=(uf&&l.find(x=>x.uf===uf))||(l.length===1?l[0]:null); return m?soDigitos(m.ibge):''; }
+
+/* ---------------- Importação: tipos novos ---------------- */
+(function(){
+  const pac=IMP_ALVOS.pacientes; const montarPac=pac.montar;
+  pac.montar=function(r, o, ctx){ montarPac.call(this, r, o, ctx); if(r.municipio && !r.ibge){ const c=municipioIbge(r.municipio, r.uf); if(c && norm(r.municipio)!==norm(cfgEnt().cidade||'')) r.ibge=c; } };
+  const refUnidade=(r, ctx)=>{ let u=null; if(r.unidadeCnes) u=impRefPor(ctx,'unidades','cnes',impConv('cnes',r.unidadeCnes),null); if(!u && r.unidadeCodigo) u=impRefPor(ctx,'unidades','codigoSIS',String(r.unidadeCodigo).trim(),null); if(!u && r.unidadeNome) u=impRefPor(ctx,'unidades','nome',norm(r.unidadeNome),null); if(u) r.unidadeId=u.id; delete r.unidadeCnes; delete r.unidadeCodigo; delete r.unidadeNome; };
+  Object.assign(IMP_ALVOS, {
+    funcionarios:{titulo:'Funcionários', ic:'🧑‍💼', tab:'funcionarios', view:'funcionarios', ordem:2.5, xml:/funcion|servidor|motorista|^ROW$/i,
+      dica:'Chave: CPF, matrícula ou nome. Quem tiver cargo MOTORISTA vai também para o Transporte.',
+      campos:[
+        {k:'nome', r:'Nome', t:'nome', obr:true, sin:['NOME','NOME_FUNCIONARIO','FUNCIONARIO','SERVIDOR','NM_FUNCIONARIO','NOME_SERVIDOR','MOTORISTA']},
+        {k:'cargo', r:'Cargo', t:'maiusc', sin:['CARGO','FUNCAO','DE_CARGO','DS_CARGO','OCUPACAO']},
+        {k:'cpf', r:'CPF', t:'cpf', sin:['CPF','NU_CPF']},
+        {k:'matricula', r:'Matrícula', sin:['MATRICULA','MATRICULA_FUNCIONAL','REGISTRO_FUNCIONAL','CD_FUNCIONARIO','COD_FUNCIONARIO']},
+        {k:'unidadeCnes', r:'CNES da unidade', aux:true, sin:['CNES','CD_CNES']},
+        {k:'unidadeCodigo', r:'Código da unidade no SIS', aux:true, sin:['CD_UNIDADE','COD_UNIDADE']},
+        {k:'unidadeNome', r:'Unidade / lotação', t:'maiusc', aux:true, sin:['UNIDADE','LOTACAO','LOCAL_TRABALHO','SETOR','NOMEFANTASIA']},
+        {k:'admissao', r:'Admissão', t:'data', sin:['ADMISSAO','DATA_ADMISSAO','DT_ADMISSAO']},
+        {k:'telefone', r:'Telefone', t:'tel', sin:['TELEFONE','FONE','CELULAR']}, {k:'email', r:'E-mail', t:'email', sin:['EMAIL','E-MAIL']},
+        {k:'cnh', r:'CNH', sin:['CNH','NU_CNH','NUMERO_CNH']}, {k:'categoriaCnh', r:'Categoria CNH', t:'maiusc', sin:['CATEGORIA','CATEGORIA_CNH','CAT_CNH']}, {k:'validadeCnh', r:'Validade CNH', t:'data', sin:['VALIDADE_CNH','VALIDADE','DT_VALIDADE_CNH']},
+        {k:'ativo', r:'Ativo', t:'sim', sin:['ATIVO','SITUACAO','STATUS']},
+      ],
+      chaves:r=>[r.cpf&&'cpf:'+r.cpf, r.matricula&&'mat:'+norm(r.matricula), r.nome&&'nome:'+norm(r.nome)],
+      montar(r, o, ctx){ refUnidade(r, ctx); if(r.ativo===undefined) r.ativo=true; if(r.categoriaCnh && !CADS.funcionarios.campos.find(c=>c.k==='categoriaCnh').op.includes(r.categoriaCnh)) delete r.categoriaCnh; },
+      validar:r=>!r.nome||r.nome.length<3?'sem nome':'', avisos:r=>[!r.cargo&&'sem cargo', !r.unidadeId&&'sem unidade'].filter(Boolean),
+      async depois(regs){ regs.forEach(f=>funcSincMotorista(f.id?obter('funcionarios',f.id)||f:f)); },
+      prev:[['nome','Nome'],['cargo','Cargo'],['unidadeId','Unidade'],['cpf','CPF'],['matricula','Matrícula']]},
+    mantenedores:{titulo:'Mantenedores', ic:'🏦', tab:'mantenedores', view:'mantenedores', ordem:1.5, xml:/manten|^ROW$/i, dica:'Chave: CNPJ ou nome.',
+      campos:[{k:'nome', r:'Nome', t:'maiusc', obr:true, sin:['NOME','MANTENEDOR','MANTENEDORA','RAZAO_SOCIAL','R_SOCIAL','NO_MANTENEDORA']},{k:'cnpj', r:'CNPJ', sin:['CNPJ','NU_CNPJ','CNPJ_MANTENEDORA']},{k:'esfera', r:'Esfera', t:'maiusc', sin:['ESFERA','ESFERA_ADMINISTRATIVA']},{k:'municipio', r:'Município', t:'maiusc', sin:['MUNICIPIO','CIDADE']},{k:'uf', r:'UF', t:'uf', sin:['UF']},{k:'telefone', r:'Telefone', t:'tel', sin:['TELEFONE','FONE']}],
+      chaves:r=>[r.cnpj&&'cnpj:'+soDigitos(r.cnpj), r.nome&&'nome:'+norm(r.nome)], montar(r){ if(r.cnpj) r.cnpj=soDigitos(r.cnpj); r.ativo=true; }, validar:r=>!r.nome?'sem nome':'', prev:[['nome','Mantenedor'],['cnpj','CNPJ'],['municipio','Município']]},
+    municipios:{titulo:'Municípios (IBGE)', ic:'🗺️', tab:'municipios', view:'enderecos', ordem:6.5, xml:/municip|^ROW$/i, dica:'Chave: código IBGE. Mais fácil: Bairros, Ruas e Municípios → Municípios → Baixar do IBGE.',
+      campos:[{k:'ibge', r:'Código IBGE', obr:true, sin:['IBGE','CODIGO_IBGE','COD_IBGE','CD_MUNICIPIO','CO_MUNICIPIO','CODIGO','CD_IBGE']},{k:'nome', r:'Município', t:'maiusc', obr:true, sin:['MUNICIPIO','NOME','NOME_MUNICIPIO','NO_MUNICIPIO','CIDADE','DESCRICAO']},{k:'uf', r:'UF', t:'uf', sin:['UF','SG_UF','ESTADO']}],
+      chaves:r=>[r.ibge&&'ibge:'+r.ibge], montar(r){ r.ibge=soDigitos(r.ibge); r.ativo=true; }, validar:r=>!r.ibge||r.ibge.length<6?'sem código IBGE':!r.nome?'sem nome':'', prev:[['ibge','IBGE'],['nome','Município'],['uf','UF']]},
+  });
+})();
+
+/* ---------------- Recados entre usuários ---------------- */
+function meuUid(){ return (USUARIO&&USUARIO.uid)||'demo'; }
+function recadosLocais(chave){ try{ return new Set(JSON.parse(localStorage.getItem(chave)||'[]')); }catch(e){ return new Set(); } }
+function recadosGuardarLocal(chave, id){ try{ const s=recadosLocais(chave); s.add(id); localStorage.setItem(chave, JSON.stringify([...s].slice(-2000))); }catch(e){} }
+function recadoLido(r){ return !!((r.lidoPor||{})[meuUid()]) || recadosLocais('pis_recados_lidos').has(r.id); }
+function recadoParaMim(r){ const u=meuUid(); return r.de!==u && (r.para==='todos' || r.para===u) && !(r.ocultoPara||[]).includes(u) && !recadosLocais('pis_recados_ocultos').has(r.id); }
+function recadosRecebidos(){ return ordenarPor(lista('recados').filter(recadoParaMim), r=>r.em).reverse(); }
+function recadosEnviados(){ const u=meuUid(); return ordenarPor(lista('recados').filter(r=>r.de===u), r=>r.em).reverse(); }
+function recadosNaoLidos(){ try{ return USUARIO ? recadosRecebidos().filter(r=>!recadoLido(r)).length : 0; }catch(e){ return 0; } }
+function recadoPodeGravar(){ return MODO_DEMO || !ACL || !USUARIO || (ACL.editores||[]).includes(USUARIO.uid); }
+function usuariosAtivos(){ return (USERS_STATE.usuarios||[]).filter(u=>u.ativo!==false && u.uid); }
+function nomeUsuarioUid(uid){ if(uid==='todos') return 'Todos os usuários'; const u=(USERS_STATE.usuarios||[]).find(x=>x.uid===uid); return u?(u.nome||u.email):'(usuário removido)'; }
+let RECADOS_ABA='recebidos';
+VIEWS.recados=()=>{
+  const rec=recadosRecebidos(), env=recadosEnviados(); const naoLid=rec.filter(r=>!recadoLido(r)).length;
+  const linha=(r, enviado)=>{ const lido=recadoLido(r); const nLidos=Object.keys(r.lidoPor||{}).length; const total=r.para==='todos'?usuariosAtivos().filter(u=>u.uid!==r.de).length:1;
+    return `<tr class="clic" ondblclick="recadoAbrir('${r.id}')" style="${!enviado&&!lido?'font-weight:700;':''}"><td class="nowrap">${esc(fmtDataHora(r.em))}</td><td>${esc(enviado?nomeUsuarioUid(r.para):(r.deNome||nomeUsuarioUid(r.de)))}</td><td>${r.urgente?'<span class="badge ruim">urgente</span> ':''}${esc(String(r.texto||'').slice(0,140))}${String(r.texto||'').length>140?'…':''}</td>
+      <td>${enviado?`<span class="small">${nLidos} de ${total} leram</span>`:(lido?'<span class="badge cinza">S</span>':'<span class="badge ambar">N</span>')}</td>
+      <td class="acoes"><button class="btn ghost small" onclick="recadoAbrir('${r.id}')">👁 ler</button>${!enviado?`<button class="btn ghost small" onclick="recadoNovo('${r.de}')">↩ responder</button>`:''}<button class="btn ghost small" onclick="recadoExcluir('${r.id}')">🗑</button></td></tr>`; };
+  return `<div class="helpbox">Como no SIS: o recado aparece para o destinatário quando ele entra no sistema (e no número ao lado de "Recados" no menu). ${recadoPodeGravar()?'':'<b>Seu perfil é só de consulta: você pode ler os recados, mas não enviar.</b>'}</div>
+  <div class="flexrow mb"><div class="tabs" style="margin:0;"><div class="tab ${RECADOS_ABA==='recebidos'?'active':''}" onclick="RECADOS_ABA='recebidos';render()">📥 Recebidos <span class="n">${naoLid?naoLid+' novo(s)':rec.length}</span></div><div class="tab ${RECADOS_ABA==='enviados'?'active':''}" onclick="RECADOS_ABA='enviados';render()">📤 Enviados <span class="n">${env.length}</span></div></div>
+    <div class="actions">${RECADOS_ABA==='recebidos'&&naoLid?`<button class="btn secondary" onclick="recadosMarcarTodos()">✔ Confirmar leitura de todos</button>`:''}${recadoPodeGravar()?`<button class="btn" onclick="recadoNovo()">✉️ Enviar novo recado</button>`:''}</div></div>
+  <div class="card"><div class="table-wrap"><table><thead><tr><th>Data/hora</th><th>${RECADOS_ABA==='enviados'?'Para':'De'}</th><th>Recado</th><th>${RECADOS_ABA==='enviados'?'Leitura':'Lido'}</th><th></th></tr></thead><tbody>
+  ${(RECADOS_ABA==='enviados'?env:rec).map(r=>linha(r, RECADOS_ABA==='enviados')).join('')||'<tr class="empty-row"><td colspan="5">Nenhum recado (são mostrados os dos últimos 3 meses).</td></tr>'}</tbody></table></div></div>`;
+};
+function recadoNovo(para){
+  if(!recadoPodeGravar()){ showToast('Seu perfil é só de consulta: não envia recados.','warning'); return; }
+  const us=usuariosAtivos().filter(u=>u.uid!==meuUid()).sort((a,b)=>String(a.nome||a.email).localeCompare(String(b.nome||b.email)));
+  abrirModal({titulo:'✉️ Enviar novo recado', corpo:`<div class="field mb"><label>Para</label><select id="rcPara"><option value="todos">📢 Todos os usuários</option>${us.map(u=>`<option value="${esc(u.uid)}" ${u.uid===para?'selected':''}>${esc(u.nome||u.email)} — ${esc((perfilDe(u)||{}).nome||'')}</option>`).join('')}</select></div>
+    <div class="field mb"><label>Recado</label><textarea id="rcTexto" rows="5" placeholder="Escreva o recado"></textarea></div><label class="check"><input type="checkbox" id="rcUrg"> Urgente</label>`,
+    botoes:[{r:'✉️ Enviar', fn:'recadoEnviar()'}]});
+  setTimeout(()=>{ const t=document.getElementById('rcTexto'); if(t) t.focus(); }, 50);
+}
+function recadoEnviar(){
+  const texto=document.getElementById('rcTexto').value.trim(); if(!texto){ showToast('Escreva o recado.','warning'); return; }
+  const para=document.getElementById('rcPara').value;
+  salvar('recados', {de:meuUid(), deNome:usuarioCurto(), para, paraNome:nomeUsuarioUid(para), texto, urgente:document.getElementById('rcUrg').checked, em:agoraLocal(), lidoPor:{}, ocultoPara:[]});
+  registrarAcao('Enviou recado para '+nomeUsuarioUid(para)); fecharModalTopo(); RECADOS_ABA='enviados'; showToast('Recado enviado.','success'); render(true);
+}
+function recadoMarcarLido(r){
+  if(!r || recadoLido(r) || r.de===meuUid()) return;
+  recadosGuardarLocal('pis_recados_lidos', r.id);
+  if(recadoPodeGravar()) salvar('recados', Object.assign({}, r, {lidoPor:Object.assign({}, r.lidoPor||{}, {[meuUid()]:agoraLocal()})}));
+}
+function recadoAbrir(id){
+  const r=obter('recados',id); if(!r) return; recadoMarcarLido(r);
+  abrirModal({titulo:'✉️ Recado'+(r.urgente?' — URGENTE':''), corpo:`<div class="kv mb"><div><span class="k">De</span><span class="v">${esc(r.deNome||nomeUsuarioUid(r.de))}</span></div><div><span class="k">Para</span><span class="v">${esc(nomeUsuarioUid(r.para))}</span></div><div><span class="k">Enviado em</span><span class="v">${esc(fmtDataHora(r.em))}</span></div>${r.de===meuUid()?`<div><span class="k">Leram</span><span class="v">${Object.keys(r.lidoPor||{}).map(u=>esc(nomeUsuarioUid(u))).join(', ')||'ninguém ainda'}</span></div>`:''}</div><div class="helpbox" style="white-space:pre-wrap;font-size:14px;">${esc(r.texto)}</div>`,
+    botoes: r.de!==meuUid()&&recadoPodeGravar() ? [{r:'↩ Responder', fn:`fecharModalTopo();recadoNovo('${r.de}')`}] : []});
+  render(true);
+}
+function recadosMarcarTodos(){ recadosRecebidos().filter(r=>!recadoLido(r)).forEach(recadoMarcarLido); render(true); renderNav(); }
+function recadoExcluir(id){
+  const r=obter('recados',id); if(!r) return;
+  if(r.de===meuUid()){ if(!confirm('Apagar este recado para todos os destinatários?')) return; if(recadoPodeGravar()) excluir('recados', id); }
+  else { if(!confirm('Tirar este recado da sua lista?')) return; recadosGuardarLocal('pis_recados_ocultos', id); recadoMarcarLido(r); if(recadoPodeGravar()) salvar('recados', Object.assign({}, obter('recados',id), {ocultoPara:unicos((r.ocultoPara||[]).concat([meuUid()]))})); }
+  render(true); renderNav();
+}
+let RECADOS_MOSTRADOS=false;
+function recadosAoEntrar(){
+  if(RECADOS_MOSTRADOS || !USUARIO || !podeVer('recados')) return; RECADOS_MOSTRADOS=true;
+  const novos=recadosRecebidos().filter(r=>!recadoLido(r)); if(!novos.length) return;
+  abrirModal({titulo:`✉️ Você tem ${novos.length} recado(s) novo(s)`, tamanho:'m-grande', corpo:novos.slice(0,10).map(r=>`<div class="helpbox" style="white-space:pre-wrap;">${r.urgente?'<span class="badge ruim">urgente</span> ':''}<b>${esc(r.deNome||nomeUsuarioUid(r.de))}</b> <span class="muted small">${esc(fmtDataHora(r.em))}${r.para==='todos'?' · para todos':''}</span><br>${esc(r.texto)}</div>`).join('')+(novos.length>10?`<div class="muted small">e mais ${novos.length-10}…</div>`:''),
+    botoes:[{r:'✔ Confirmar leitura', fn:'recadosMarcarTodos();fecharModalTopo()'},{r:'✉️ Abrir Recados', fn:"fecharModalTopo();goto('recados')"}]});
+}
+
+/* ---------------- Exportar tabelas (como o "Exportar Tabela do Sistema" do SIS) ---------------- */
+const TAB_TITULOS={pacientes:'Pacientes', familias:'Famílias', vagas:'Vagas (escalas)', ausencias:'Ausências', agendamentos:'Agendamentos', listaEspera:'Lista de espera', agendExames:'Agendamento de exames', atendimentos:'Atendimentos (F.A.)', clinico:'Registros clínicos (triagem/consulta)', producao:'Produção diária', sadt:'SADT', examesExternos:'Exames de outras entidades', notificacoes:'Notificações', hiperdia:'Hiperdia', gestacoes:'Gestações', vacinacoes:'Vacinações', animais:'Animais', vacinasAnimais:'Vacinas de animais', encaminhamentos:'Encaminhamentos', agendTransportes:'Agendamento de transporte', viagens:'Viagens', anexos:'Anexos (só a lista)', chamadas:'Chamadas do painel', feriados:'Feriados', config:'Configurações', labRequisicoes:'Laboratório — requisições e resultados', labLotes:'Laboratório — lotes de apoio', labProducao:'Laboratório — produção', labResponsaveis:'Laboratório — responsáveis', importacoes:'Histórico de importações', recados:'Recados', campanhas:'Campanhas de vacinação'};
+function tituloTabela(t){ return (CADS[t]&&CADS[t].titulo) || TAB_TITULOS[t] || t; }
+const EXP_REFS={pacienteId:'pacientes', profissionalId:'profissionais', unidadeId:'unidades', especialidadeId:'especialidades', localId:'locais', exameId:'labExames', convenioId:'convenios', unidadeSolicitanteId:'unidades', labUnidadeId:'unidades', vacinaId:'imunobiologicos', veiculoId:'veiculos', motoristaId:'motoristas', mantenedorId:'mantenedores'};
+let EXPX={sel:new Set(), ini:'', fim:'', formato:'xlsx', nomes:true};
+VIEWS.exportarDados=()=>{
+  if(!EXPX.ini) EXPX.ini=(cfgGeral().inicio||mesDe(hojeISO()))+'-01'; if(!EXPX.fim) EXPX.fim=hojeISO();
+  const tabs=Object.keys(TABELAS).filter(t=>tabelaPermitida(t) && !['contadores'].includes(t));
+  const grupos=[['🗂️ Cadastros e tabelas', tabs.filter(t=>TABELAS[t].modo!=='mes' && !TABELAS[t].clinico)],['📅 Movimento (por período)', tabs.filter(t=>TABELAS[t].modo==='mes' && !TABELAS[t].clinico)],['🔒 Dados clínicos (sigilo — LGPD)', tabs.filter(t=>TABELAS[t].clinico)]];
+  return `<div class="helpbox">Como o <b>Exportar Tabela do Sistema</b> do SIS: escolha as tabelas e baixe em <b>Excel</b> (uma aba por tabela) ou <b>JSON</b> (para outro sistema). As tabelas de movimento saem só no período escolhido. Os dados exportados ficam fora da proteção do sistema — guarde o arquivo com cuidado. Cada exportação fica no Registro de Acessos.</div>
+  <div class="card"><div class="actions mb">Período do movimento: <input type="date" class="inp" style="width:auto;" value="${EXPX.ini}" onchange="EXPX.ini=this.value"> a <input type="date" class="inp" style="width:auto;" value="${EXPX.fim}" onchange="EXPX.fim=this.value">
+    <select class="inp" style="width:auto;" onchange="EXPX.formato=this.value"><option value="xlsx" ${EXPX.formato==='xlsx'?'selected':''}>Excel (.xlsx)</option><option value="json" ${EXPX.formato==='json'?'selected':''}>JSON (outro sistema)</option></select>
+    <label class="check small"><input type="checkbox" ${EXPX.nomes?'checked':''} onchange="EXPX.nomes=this.checked"> incluir os nomes (paciente, profissional, unidade...) ao lado dos códigos</label></div>
+  ${grupos.map(([g,ts])=>ts.length?`<div class="flabel" style="margin-top:10px;">${g} <a href="#" class="small" onclick="${ts.map(t=>`EXPX.sel.add('${t}')`).join(';')};render(true);return false;">marcar todas</a></div><div class="checks">${ts.sort((a,b)=>tituloTabela(a).localeCompare(tituloTabela(b))).map(t=>`<label class="check"><input type="checkbox" ${EXPX.sel.has(t)?'checked':''} onchange="this.checked?EXPX.sel.add('${t}'):EXPX.sel.delete('${t}')"> ${esc(tituloTabela(t))} <span class="muted small">(${fmtNum(lista(t).length)}${TABELAS[t].modo==='mes'?' carregados':''})</span></label>`).join('')}</div>`:'').join('')}
+  <div class="actions mt"><button class="btn big" onclick="exportarTabelas()">📤 Exportar as tabelas marcadas</button><button class="btn ghost" onclick="EXPX.sel=new Set();render(true)">limpar seleção</button></div></div>`;
+};
+function expValor(v){ if(v===undefined||v===null) return ''; if(typeof v==='boolean') return v?'Sim':'Não'; if(typeof v==='number'||typeof v==='string') return v; if(Array.isArray(v) && v.every(x=>x===null||['string','number','boolean'].includes(typeof x))) return v.join('; '); return JSON.stringify(v).slice(0,32000); }
+async function exportarTabelas(){
+  const sel=[...EXPX.sel].filter(t=>TABELAS[t] && tabelaPermitida(t)); if(!sel.length){ showToast('Marque ao menos uma tabela.','warning'); return; }
+  if(EXPX.ini>EXPX.fim){ showToast('A data inicial é maior que a final.','warning'); return; }
+  const mensais=sel.filter(t=>TABELAS[t].modo==='mes'); if(mensais.length) await garantirPeriodo(mensais, EXPX.ini, EXPX.fim);
+  const dados={}; sel.forEach(t=>{ let l=lista(t); if(TABELAS[t].modo==='mes'){ const c=TABELAS[t].campo; l=l.filter(r=>{ const d=String(r[c]||'').slice(0,10); return d>=EXPX.ini && d<=EXPX.fim; }); } dados[t]=l; });
+  const nome='Programa Integral de Saúde — exportação '+hojeISO();
+  if(EXPX.formato==='json'){ baixarArquivo(JSON.stringify({sistema:APP_NOME, versao:appVersao(), entidade:entidadeFantasia(), exportadoEm:agoraLocal(), exportadoPor:usuarioCurto(), periodo:[EXPX.ini, EXPX.fim], tabelas:dados}, null, 1), nomeArquivo(nome)+'.json', 'application/json'); }
+  else {
+    const abas=sel.map(t=>{ const l=dados[t]; const ks=[]; l.forEach(r=>Object.keys(r).forEach(k=>{ if(!ks.includes(k)) ks.push(k); }));
+      const cab=[]; ks.forEach(k=>{ cab.push(k); if(EXPX.nomes && EXP_REFS[k]) cab.push(k.replace(/Id$/,'')+' (nome)'); });
+      return {nome:tituloTabela(t).replace(/[\\\/\?\*\[\]:]/g,' ').slice(0,31), titulo:tituloTabela(t)+(TABELAS[t].modo==='mes'?' — '+fmtData(EXPX.ini)+' a '+fmtData(EXPX.fim):''), cab, linhas:l.map(r=>{ const out=[]; ks.forEach(k=>{ out.push(expValor(r[k])); if(EXPX.nomes && EXP_REFS[k]) out.push(r[k]?nomeDe(EXP_REFS[k], r[k]):''); }); return out; })}; });
+    const vistos={}; abas.forEach(a=>{ let n=a.nome, i=2; while(vistos[n]){ n=a.nome.slice(0,28)+' '+i++; } vistos[n]=1; a.nome=n; });
+    exportarExcel(nome, abas);
+  }
+  registrarAcao('Exportou '+sel.length+' tabela(s): '+sel.map(tituloTabela).join(', ')+' ('+EXPX.formato+')');
+  showToast('Exportação gerada ('+sel.reduce((s,t)=>s+dados[t].length,0)+' registro(s)).','success');
+}
+
+/* ---------------- Unificar profissionais (como o "Unifica Profissional" do SIS) ---------------- */
+function paresProfDuplicados(){
+  const ps=lista('profissionais').filter(p=>!p.unificadoEm); const pares=[]; const visto=new Set();
+  const add=(a,b,m)=>{ const k=[a.id,b.id].sort().join('|'); if(!visto.has(k)){ visto.add(k); pares.push({a,b,m}); } };
+  ['cns','cpf'].forEach(f=>agrupar(ps.filter(p=>soDigitos(p[f]).length>=11), p=>soDigitos(p[f])).forEach(g=>{ for(let i=1;i<g.length;i++) add(g[0],g[i],'mesmo '+f.toUpperCase()); }));
+  for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++){ const s=similaridade(ps[i].nome, ps[j].nome); if(s>=0.88) add(ps[i], ps[j], s===1?'mesmo nome':'nome parecido ('+Math.round(s*100)+'%)'); }
+  return pares;
+}
+VIEWS.unificarProfissionais=()=>{
+  const pares=paresProfDuplicados();
+  return `<div class="helpbox">Junta dois cadastros do mesmo profissional (comum depois de importar de mais de um sistema). <b>Agenda, vagas, atendimentos, produção, laboratório, usuários e demais registros</b> do cadastro repetido passam para o principal. O repetido não é apagado: fica inativo, com a anotação "unificado".</div>
+  <div class="card"><div class="flexrow mb"><h2 style="margin:0;">Possíveis repetidos (${pares.length})</h2><button class="btn secondary" onclick="profUnifManual()">Escolher dois profissionais</button></div>
+  ${tabelaHTML(['Cadastro A','Cadastro B','Motivo',''], pares.slice(0,300).map(x=>[`<b>${esc(x.a.nome)}</b><div class="small muted">CNS ${esc(fmtCNS(x.a.cns)||'—')} · ${esc(nomeDe('especialidades',x.a.especialidadeId))}</div>`, `<b>${esc(x.b.nome)}</b><div class="small muted">CNS ${esc(fmtCNS(x.b.cns)||'—')} · ${esc(nomeDe('especialidades',x.b.especialidadeId))}</div>`, esc(x.m), `<button class="btn small" onclick="profUnifComparar('${x.a.id}','${x.b.id}')">Comparar e unificar</button>`]), {html:true})}</div>`;
+};
+function profUnifManual(){
+  const ops=ordenarTexto(lista('profissionais').filter(p=>!p.unificadoEm), p=>p.nome).map(p=>`<option value="${p.id}">${esc(p.nome)} — ${esc(fmtCNS(p.cns)||'sem CNS')}</option>`).join('');
+  abrirModal({titulo:'🔗 Escolher os dois cadastros', corpo:`<div class="field mb"><label>Cadastro A</label><select id="puA"><option value="">—</option>${ops}</select></div><div class="field"><label>Cadastro B</label><select id="puB"><option value="">—</option>${ops}</select></div>`,
+    botoes:[{r:'Comparar', fn:"(()=>{const a=document.getElementById('puA').value,b=document.getElementById('puB').value; if(!a||!b||a===b){showToast('Escolha dois profissionais diferentes.','warning');return;} fecharModalTopo(); profUnifComparar(a,b);})()"}]});
+}
+function profUnifComparar(aId, bId){
+  if(!isAdmin()){ showToast('Só o administrador unifica cadastros.','warning'); return; }
+  const a=obter('profissionais',aId), b=obter('profissionais',bId); if(!a||!b) return; const cad=CADS.profissionais;
+  const campos=cad.campos.filter(c=>!['ativo','unidades','especialidades'].includes(c.k));
+  const linhas=campos.map(c=>{ const va=cadFmt(cad,c.k,a), vb=cadFmt(cad,c.k,b); if(!va&&!vb) return ''; const igual=JSON.stringify(a[c.k]??'')===JSON.stringify(b[c.k]??'');
+    return `<tr><td class="muted">${esc(c.r)}</td><td><label class="check"><input type="radio" name="pu_${c.k}" value="a" ${igual||va||!vb?'checked':''}> ${esc(va||'—')}</label></td><td>${igual?'<span class="muted">igual</span>':`<label class="check"><input type="radio" name="pu_${c.k}" value="b" ${!va&&vb?'checked':''}> ${esc(vb||'—')}</label>`}</td></tr>`; }).join('');
+  abrirModal({titulo:'🔗 Unificar profissionais', tamanho:'m-grande', corpo:`<div class="helpbox">Escolha o cadastro principal e, em cada linha, qual informação manter. As unidades e especialidades dos dois são somadas.</div>
+    <div class="actions mb"><label class="check"><input type="radio" name="puPrinc" value="a" checked> Principal: <b>A</b> — ${esc(a.nome)}</label><label class="check"><input type="radio" name="puPrinc" value="b"> Principal: <b>B</b> — ${esc(b.nome)}</label></div>
+    <div class="table-wrap"><table><thead><tr><th>Campo</th><th>Cadastro A</th><th>Cadastro B</th></tr></thead><tbody>${linhas}</tbody></table></div>`,
+    botoes:[{r:'🔗 Unificar', fn:`profUnifExecutar('${aId}','${bId}')`}]});
+}
+function trocarIdProfundo(v, de, para){
+  if(v===de) return [para, true];
+  if(Array.isArray(v)){ let m=false; const r=v.map(x=>{ const [y,c]=trocarIdProfundo(x,de,para); if(c) m=true; return y; }); return [m ? (r.every(x=>typeof x==='string') ? [...new Set(r)] : r) : v, m]; }
+  if(v && typeof v==='object'){ let m=false; const o={}; Object.keys(v).forEach(k=>{ const [y,c]=trocarIdProfundo(v[k],de,para); o[k]=y; if(c) m=true; }); return [m?o:v, m]; }
+  return [v, false];
+}
+async function profUnifExecutar(aId, bId){
+  const a=obter('profissionais',aId), b=obter('profissionais',bId);
+  const princA=document.querySelector('input[name=puPrinc]:checked').value==='a'; const prin=princA?a:b, sec=princA?b:a;
+  const novo=Object.assign({}, prin);
+  CADS.profissionais.campos.forEach(c=>{ const r=document.querySelector(`input[name=pu_${c.k}]:checked`); if(r){ const f=r.value==='a'?a:b; if(f[c.k]!==undefined) novo[c.k]=f[c.k]; } });
+  novo.unidades=unicos([].concat(a.unidades||[], b.unidades||[])); novo.especialidades=unicos([].concat(a.especialidades||[], b.especialidades||[])).filter(e=>e!==novo.especialidadeId);
+  /* campos que não estão no formulário (ex.: código do SIS vindo da importação): o principal ganha os que estavam vazios */
+  Object.keys(sec).forEach(k=>{ if(['id','ativo','criadoEm','criadoPor','alteradoEm','alteradoPor','unificadoEm','importacao','obs'].includes(k)) return; if(impVazio(novo[k]) && !impVazio(sec[k])) novo[k]=sec[k]; });
+  if(!confirm(`Unificar: tudo de "${sec.nome}" passará para "${prin.nome}". Confirmar?`)) return;
+  carregandoMsg(true,'Buscando todos os registros do profissional…');
+  try{
+    await garantirPeriodo(Object.keys(TABELAS).filter(t=>TABELAS[t].modo==='mes' && tabelaPermitida(t)), (cfgGeral().inicio||mesDe(hojeISO()))+'-01', addMeses(mesDe(hojeISO()),6)+'-01');
+    let n=0;
+    Object.keys(TABELAS).forEach(t=>{ if(!tabelaPermitida(t)) return; lista(t).forEach(r=>{ if(t==='profissionais' && (r.id===prin.id||r.id===sec.id)) return; const [c,m]=trocarIdProfundo(r, sec.id, prin.id); if(m){ c.id=r.id; salvar(t, c); n++; } }); });
+    let usu=false; (USERS_STATE.usuarios||[]).forEach(u=>{ if(u.profissionalId===sec.id){ u.profissionalId=prin.id; usu=true; } }); if(usu) await gravarUsuariosEAcl().catch(e=>showToast('Usuários: '+(e.message||msgErro(e)),'warning'));
+    salvar('profissionais', novo);
+    salvar('profissionais', Object.assign({}, sec, {ativo:false, unificadoEm:prin.id, obs:((sec.obs||'')+`\nUnificado em ${fmtData(hojeISO())} com ${prin.nome}.`).trim()}));
+    registrarAcao(`Unificou o profissional ${sec.nome} em ${prin.nome} — ${n} registro(s) transferido(s)`);
+    fecharModalTopo(); showToast(`Profissionais unificados: ${n} registro(s) transferido(s).`,'success');
+  }catch(e){ console.error(e); showToast('Falha ao unificar: '+msgErro(e),'error'); }
+  finally{ carregandoMsg(false); render(true); }
+}
+
+/* ---------------- Painel geral do sistema ---------------- */
+function menuAbrirModulo(id){
+  const m=MODULOS_MENU.find(x=>x.id===id); if(!m) return;
+  const s=navModulosSet(); s.add(id); try{ localStorage.setItem(NAV_MODULOS_KEY, JSON.stringify([...s])); }catch(e){}
+  const v=MENU.filter(g=>m.grupos.includes(g.g)).flatMap(g=>g.itens).find(it=>podeVer(it.id) && it.id!=='menuPainel');
+  if(v) goto(v.id); else renderNav();
+}
+VIEWS.menuPainel=()=>{
+  const e=cfgEnt(); const st=(l,v,h,go)=>`<div class="stat ${go&&podeVer(go)?'clic':''}" ${go&&podeVer(go)?`onclick="goto('${go}')"`:''}><div class="label">${l}</div><div class="value">${v}</div>${h?`<div class="hint">${h}</div>`:''}</div>`;
+  const nRec=recadosNaoLidos(); const imps=ordenarPor(lista('importacoes'), x=>x.data).reverse().slice(0,5);
+  const mods=MODULOS_MENU.filter(m=>m.id!=='menu').map(m=>{ const its=MENU.filter(g=>m.grupos.includes(g.g)).flatMap(g=>g.itens); const vis=its.filter(it=>podeVer(it.id)).length;
+    return `<div class="stat ${vis?'clic':''}" ${vis?`onclick="menuAbrirModulo('${m.id}')"`:''}><div class="label">${m.ic} ${esc(m.nome)}</div><div class="value" style="font-size:18px;">${vis} tela(s)</div><div class="hint">${vis?'clique para abrir':'seu perfil não acessa'}</div></div>`; }).join('')
+    + (typeof MODULOS_PLANEJADOS!=='undefined'?MODULOS_PLANEJADOS.slice(0,6).map(p=>`<div class="stat" style="opacity:.55;"><div class="label">${p[0]} ${esc(p[1])}</div><div class="hint" style="margin-top:8px;">em breve</div></div>`).join(''):'');
+  const passos=isAdmin()&&typeof primeirosPassos==='function'?primeirosPassos():[]; const faltam=passos.filter(p=>!p[1]);
+  return `<div class="card" style="display:flex;gap:14px;align-items:center;">${e.brasao?`<img src="${esc(e.brasao)}" style="max-height:58px;max-width:90px;">`:'<span style="font-size:40px;">🏛️</span>'}<div><div style="font-size:18px;font-weight:800;">${esc(entidadeNome())}</div><div class="muted">${esc(e.fantasia||'')} · ${esc(APP_NOME)} v. ${appVersao()}</div><div class="small muted">Olá, <b>${esc(usuarioCurto())}</b> — ${esc((PERFIL||{}).nome||'')} · unidade ${esc(nomeDe('unidades',UNIDADE_ATUAL)||'—')}</div></div></div>
+  ${nRec?`<div class="alerta-aviso">✉️ Você tem <b>${nRec}</b> recado(s) não lido(s). <a href="#" onclick="goto('recados');return false;">Abrir recados</a></div>`:''}
+  <div class="grid cols-6 mb">${st('Unidades', fmtNum(ativos('unidades').length), 'ativas', 'unidades')}${st('Profissionais', fmtNum(ativos('profissionais').length), 'ativos', 'profissionais')}${st('Funcionários', fmtNum(ativos('funcionarios').length), '', 'funcionarios')}${st('Pacientes', fmtNum(lista('pacientes').filter(p=>p.situacao!=='unificado').length), '', 'pacientes')}${st('Usuários', fmtNum((USERS_STATE.usuarios||[]).filter(u=>u.ativo!==false).length), 'com acesso', 'usuarios')}${st('Recados', nRec, 'não lidos', 'recados')}</div>
+  <div class="card"><h2>🧩 Módulos</h2><div class="subtitle">Todos usam os mesmos cadastros deste Módulo Menu. Clique para abrir.</div><div class="grid cols-4">${mods}</div></div>
+  ${faltam.length?`<div class="card" style="border-left:4px solid var(--amber);"><h2>🚀 Primeiros passos</h2><div class="grid cols-3">${passos.map(p=>`<div class="flexrow" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;"><span>${p[1]?'✅':'⬜'} ${esc(p[0])}</span>${!p[1]?`<button class="btn small" onclick="goto('${p[2]}')">ir</button>`:''}</div>`).join('')}</div><div class="actions mt"><button class="btn secondary" onclick="goto('importacao')">📥 Importar de outro sistema (Fiorilli, e-SUS, CNES, planilhas)</button></div></div>`:''}
+  <div class="grid cols-2" style="align-items:start;">
+    <div class="card"><h2>⚡ Atalhos</h2><div class="actions">${[['importacao','📥 Importar dados'],['entidade','🏛️ Entidade'],['unidades','🏥 Unidades'],['profissionais','👩‍⚕️ Profissionais'],['usuarios','👤 Usuários'],['recados','✉️ Recados'],['sobre','❔ Ajuda']].filter(x=>podeVer(x[0])).map(x=>`<button class="btn secondary" onclick="goto('${x[0]}')">${x[1]}</button>`).join('')}</div></div>
+    ${isAdmin()?`<div class="card"><h2>📥 Últimas importações</h2>${imps.length?tabelaHTML(['Quando','O quê','Incluídos','Situação'], imps.map(x=>[fmtDataHora(x.data), (IMP_ALVOS[x.alvo]||{titulo:x.alvo}).titulo, fmtNum(x.novos||0), x.desfeita?'desfeita':x.falhou?'falhou':'ok'])):'<div class="muted small">Nenhuma ainda. <a href="#" onclick="goto(\'importacao\');return false;">Importar agora</a></div>'}</div>`:''}
+  </div>`;
+};
+
+/* ---------------- Sistema: conexão, senha e usuário ---------------- */
+VIEWS.sessao=()=>{
+  const u=USUARIO||{}; const on=navigator.onLine && (typeof CONECTADO==='undefined'||CONECTADO); const pend=typeof GRAVACOES_PENDENTES!=='undefined'?GRAVACOES_PENDENTES:0;
+  const kv=(k,v)=>`<div><span class="k">${k}</span><span class="v">${v}</span></div>`;
+  return `<div class="grid cols-2" style="align-items:start;">
+  <div class="card"><h2>🔌 Conexão</h2><div class="kv">${kv('Situação', MODO_DEMO?'💻 Modo demonstração (dados só neste computador)':(on?'🟢 Conectado à nuvem':'🔴 Sem conexão — as alterações ficam guardadas e sobem quando a internet voltar'))}${kv('Gravações pendentes', pend)}${MODO_DEMO?'':kv('Banco de dados', 'Firebase — projeto '+esc(firebaseConfig.projectId)+' · coleção '+esc(COLECAO))}${kv('Atualização', 'em tempo real em todos os computadores')}</div>
+    <div class="subtitle mt">No SIS era preciso configurar o IP e a porta do servidor. Aqui não: o sistema roda no navegador e conversa direto com a nuvem — basta internet.</div>
+    <div class="actions mt"><button class="btn secondary" onclick="location.reload()">🔄 Recarregar o sistema</button></div></div>
+  <div class="card"><h2>👤 Você</h2><div class="kv">${kv('Nome', esc(u.nome||''))}${kv('E-mail', esc(u.email||''))}${kv('Perfil', esc((PERFIL||{}).nome||''))}${kv('Acesso clínico', podeClinico()?'sim':'não')}${kv('Administrador', isAdmin()?'sim':'não')}${kv('Unidade atual', esc(nomeDe('unidades',UNIDADE_ATUAL)||'—'))}${kv('Entrou em', esc(fmtDataHora((typeof SESSAO!=='undefined'&&SESSAO&&SESSAO.ini)||'')))}${kv('Sai sozinho após', param('inatividadeMin')+' min sem uso')}</div>
+    <div class="actions mt"><button class="btn" onclick="alterarMinhaSenha()">🔑 Trocar minha senha</button><button class="btn secondary" onclick="sairDoSistema()">👥 Trocar de usuário (sair)</button></div></div></div>
+  <div class="card"><h2>🧹 Preferências deste computador</h2><div class="subtitle">O sistema lembra neste computador quais partes do menu ficam abertas, as colunas escolhidas nas importações e os recados já lidos. Limpar não apaga nenhum dado do sistema.</div><button class="btn ghost" onclick="limparPreferenciasLocais()">🧹 Limpar as preferências deste computador</button></div>`;
+};
+function limparPreferenciasLocais(){
+  if(!confirm('Limpar as preferências deste computador (menu, colunas de importação, recados lidos)? Nenhum dado do sistema é apagado.')) return;
+  try{ ['pis_nav_abertos','pis_nav_modulos','pis_imp_mapas','pis_recados_lidos','pis_recados_ocultos'].forEach(k=>localStorage.removeItem(k)); }catch(e){}
+  showToast('Preferências limpas.','success'); setTimeout(()=>location.reload(), 600);
+}
+
+/* ---------------- Ajuda e sobre ---------------- */
+const VERSOES=[
+  ['1.0.2026','14/10/2026','Criação — Módulo Ambulatório completo (equivalente ao SIS_AMB).'],
+  ['1.01.2026','14/10/2026','Menu lateral reunido em "MÓDULO AMBULATÓRIO", que abre e fecha com um clique.'],
+  ['1.02.2026','14/10/2026','MÓDULO LABORATÓRIO (equivalente ao SIS_LABO): requisição, coleta e etiquetas, resultados, liberação, laudos, apoio, integração e relatórios; produção no BPA.'],
+  ['1.03.2026','14/10/2026','Importar de Outros Sistemas: Fiorilli SIS (XML/TXT), e-SUS (XML/zip), CNES e planilhas, com histórico e "desfazer".'],
+  ['1.04.2026','14/10/2026','MÓDULO MENU (equivalente ao SIS_MENU): cadastros comuns saem do Ambulatório; funcionários, mantenedores, tipos de logradouro, municípios do IBGE, exportar tabelas, recados, unificar profissionais, conexão e ajuda.'],
+];
+VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
+  <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div></div>
+    <div class="subtitle mt">Sistema modular de saúde pública: os módulos usam os mesmos cadastros, usuários e banco. Inspirado na organização do SIS da Fiorilli (SIS_MENU, SIS_AMB, SIS_LABO...).</div></div>
+  <div class="card"><h2>💡 Dicas de uso</h2><ul style="margin:0;padding-left:18px;line-height:1.8;font-size:13px;">
+    <li>Clique no nome do <b>módulo</b> no menu para abrir ou fechar todas as telas dele.</li>
+    <li>Use <b>"Buscar módulo..."</b> no alto do menu para achar uma tela pelo nome.</li>
+    <li><b>Esc</b> fecha a janela aberta; duplo clique numa linha abre o cadastro.</li>
+    <li>Tudo é salvo sozinho na nuvem e aparece na hora nos outros computadores.</li>
+    <li>Já tem os cadastros em outro sistema? <a href="#" onclick="goto('importacao');return false;">Importe de uma vez</a> (Fiorilli, e-SUS, CNES, planilhas).</li>
+    <li>Para treinar a equipe, use o <b>modo demonstração</b> na tela de acesso — não grava nada na nuvem.</li>
+    <li>Dúvidas e liberação de acesso: fale com o administrador do sistema na Secretaria.</li></ul></div></div>
+  <div class="card"><h2>📜 Novidades de cada versão</h2>${tabelaHTML(['Versão','Data','O que mudou'], VERSOES.slice().reverse())}</div>`;
 
 </script>
 </body>
