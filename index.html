@@ -569,10 +569,14 @@ const DOC_CONTADORES = 'contadores';
                              etiquetas com código de barras, mapa de trabalho, digitação e
                              liberação, laudos, laboratório de apoio, integração com equipamentos,
                              relatórios; produção dos exames entra no BPA
+     1.03.2026  14/10/2026   IMPORTAR DE OUTROS SISTEMAS (Cadastros Gerais): pacientes, profissionais,
+                             unidades, CBO, destinos, bairros, ruas, convênios, medicamentos e exames
+                             do Fiorilli SIS (XML/TXT), e-SUS (XML/zip), CNES e planilhas; histórico
+                             com "desfazer"
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 2;
+const APP_ALTERACAO = 3;
 const APP_DATA = '2026-10-14';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -803,6 +807,7 @@ const TABELAS = {
   labRequisicoes:{modo:'mes',campo:'data',partes:16,clinico:true},
   labLotes:{modo:'mes',campo:'data',partes:1,clinico:true},
   labProducao:{modo:'mes',campo:'data',partes:4},  /* produção SIGTAP dos exames liberados (sem resultado): o faturamento lê sem acesso clínico */
+  importacoes:{},  /* histórico da tela "Importar de Outros Sistemas" */
 };
 /* Capacidade: cada parte guarda até ~900 KB. Com as partes acima o sistema comporta, por exemplo,
    ~40 mil pacientes, ~100 mil doses de vacina e ~3 mil atendimentos por mês. Para um município
@@ -2035,7 +2040,7 @@ const CADS = {
     {k:'usaTriagem', r:'Pacientes passam pela triagem antes da consulta', t:'sim', padrao:true, w:2},
     {k:'ativo', r:'Unidade ativa', t:'sim', padrao:true, w:2},
     {k:'locaisChamada', r:'Locais de chamada (painel da TV)', w:4, ph:'Ex.: Triagem, Consultório 1, Consultório 2, Sala de vacina', dica:'Separe por vírgula. Aparecem para escolher ao chamar o paciente no painel.'},
-  ], cols:[['nome','Unidade'],['cnes','CNES'],['tipo','Tipo'],['telefone','Telefone'],['usaTriagem','Triagem'],['ativo','Situação']], busca:['nome','cnes','tipo','bairro']},
+  ], cols:[['nome','Unidade'],['cnes','CNES'],['tipo','Tipo'],['telefone','Telefone'],['usaTriagem','Triagem'],['ativo','Situação']], busca:['nome','cnes','tipo','bairro'], importar:true},
   profissionais:{tab:'profissionais', titulo:'Profissionais', view:'profissionais', campos:[
     {k:'nome', r:'Nome completo', obr:true, w:2, maiusc:true},
     {k:'tipo', r:'Categoria', t:'sel', obr:true, op:[['medico','Médico(a)'],['superior','Nível superior (não médico)'],['tecnico','Nível técnico / médio'],['acs','Agente comunitário de saúde'],['outro','Outro']]},
@@ -2047,20 +2052,20 @@ const CADS = {
     {k:'telefone', r:'Telefone', t:'tel'}, {k:'email', r:'E-mail', t:'email'},
     {k:'tempoConsulta', r:'Tempo de consulta (min)', t:'int', padrao:15}, {k:'localChamada', r:'Local de chamada no painel', ph:'Ex.: Consultório 2'},
     {k:'agenda', r:'Atende com agenda', t:'sim', padrao:true}, {k:'ativo', r:'Ativo', t:'sim', padrao:true},
-  ], cols:[['nome','Profissional'],['tipo','Categoria'],['especialidadeId','Especialidade'],['cns','CNS'],['registro','Registro'],['unidades','Unidades'],['ativo','Situação']], busca:['nome','cns','cpf','registro']},
+  ], cols:[['nome','Profissional'],['tipo','Categoria'],['especialidadeId','Especialidade'],['cns','CNS'],['registro','Registro'],['unidades','Unidades'],['ativo','Situação']], busca:['nome','cns','cpf','registro'], importar:true},
   locais:{tab:'locais', titulo:'Outras Entidades (destinos de encaminhamento, exames e transporte)', view:'locais', campos:[
     {k:'nome', r:'Nome', obr:true, w:2, maiusc:true},
     {k:'tipo', r:'Tipo', t:'sel', op:['HOSPITAL','AME / CENTRO DE ESPECIALIDADES','CLÍNICA','LABORATÓRIO','SERVIÇO DE IMAGEM','CAPS','UNIDADE DE REFERÊNCIA','CONSÓRCIO','OUTRO']},
     {k:'cnes', r:'CNES'}, {k:'municipio', r:'Município', obr:true}, {k:'uf', r:'UF', t:'uf'},
     {k:'endereco', r:'Endereço', w:2}, {k:'telefone', r:'Telefone', t:'tel'}, {k:'contato', r:'Contato'},
     {k:'distanciaKm', r:'Distância (km)', t:'num'}, {k:'obs', r:'Observações', t:'area', w:4}, {k:'ativo', r:'Ativo', t:'sim', padrao:true},
-  ], cols:[['nome','Nome'],['tipo','Tipo'],['municipio','Município'],['uf','UF'],['telefone','Telefone'],['distanciaKm','km'],['ativo','Situação']], busca:['nome','municipio','tipo']},
+  ], cols:[['nome','Nome'],['tipo','Tipo'],['municipio','Município'],['uf','UF'],['telefone','Telefone'],['distanciaKm','km'],['ativo','Situação']], busca:['nome','municipio','tipo'], importar:true},
   bairros:{tab:'bairros', titulo:'Bairros', campos:[{k:'nome', r:'Bairro', obr:true, w:2, maiusc:true, unico:true},{k:'zona', r:'Zona', t:'sel', op:['URBANA','RURAL']},{k:'area', r:'Área (ESF)'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Bairro'],['zona','Zona'],['area','Área'],['ativo','Situação']], busca:['nome'], importar:true},
   logradouros:{tab:'logradouros', titulo:'Logradouros', campos:[{k:'tipo', r:'Tipo', t:'sel', op:['RUA','AVENIDA','TRAVESSA','ALAMEDA','PRAÇA','ESTRADA','RODOVIA','SÍTIO','FAZENDA','CHÁCARA','VIELA','OUTRO']},{k:'nome', r:'Nome', obr:true, w:2, maiusc:true},{k:'bairro', r:'Bairro', lista:'dlBairros'},{k:'cep', r:'CEP', t:'cep'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['tipo','Tipo'],['nome','Logradouro'],['bairro','Bairro'],['cep','CEP']], busca:['nome','bairro','cep'], importar:true},
   especialidades:{tab:'especialidades', titulo:'Especialidades (CBO)', grupo:'SIA-SUS', campos:[{k:'cbo', r:'CBO', obr:true, unico:true},{k:'nome', r:'Especialidade / ocupação', obr:true, w:3, maiusc:true},{k:'ativo', r:'Ativa', t:'sim', padrao:true}], cols:[['cbo','CBO'],['nome','Especialidade'],['ativo','Situação']], busca:['cbo','nome'], importar:true},
   tiposAtendimento:{tab:'tiposAtendimento', titulo:'Tipos de Atendimento', grupo:'SIA-SUS', campos:[{k:'nome', r:'Tipo de atendimento', obr:true, w:3, maiusc:true, unico:true},{k:'carater', r:'Caráter (BPA)', t:'sel', op:CARATER_ATEND, padrao:'01'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Tipo'],['carater','Caráter'],['ativo','Situação']], busca:['nome']},
   tiposFicha:{tab:'tiposFicha', titulo:'Tipos de Ficha (F.A.)', grupo:'SIA-SUS', campos:[{k:'nome', r:'Tipo de ficha', obr:true, w:3, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Tipo de ficha'],['ativo','Situação']], busca:['nome']},
-  convenios:{tab:'convenios', titulo:'Convênios', grupo:'Auxiliares', campos:[{k:'nome', r:'Convênio', obr:true, w:3, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Convênio'],['ativo','Situação']], busca:['nome']},
+  convenios:{tab:'convenios', titulo:'Convênios', grupo:'Auxiliares', campos:[{k:'nome', r:'Convênio', obr:true, w:3, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Convênio'],['ativo','Situação']], busca:['nome'], importar:true},
   motivosFalta:{tab:'motivosFalta', titulo:'Motivos de Falta / Cancelamento', grupo:'Auxiliares', campos:[{k:'nome', r:'Motivo', obr:true, w:3, maiusc:true, unico:true},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Motivo'],['ativo','Situação']], busca:['nome']},
   cid:{tab:'cid', titulo:'CID-10', grupo:'SIA-SUS', campos:[{k:'codigo', r:'Código', obr:true, unico:true, dica:'Sem ponto. Ex.: I10, E119'},{k:'nome', r:'Descrição', obr:true, w:3},{k:'sexo', r:'Restrito ao sexo', t:'sel', op:[['F','Feminino'],['M','Masculino']]},{k:'notificavel', r:'Notificação compulsória', t:'sim'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['codigo','Código'],['nome','Descrição'],['notificavel','Notificável']], busca:['codigo','nome'], importar:true, ajuda:'Importe a tabela completa do DATASUS: arquivo <b>CID-10-SUBCATEGORIAS.CSV</b> (ou CID-10-CATEGORIAS.CSV), em <i>datasus.saude.gov.br → CID-10 → download</i>.'},
   procedimentos:{tab:'procedimentos', titulo:'Procedimentos (SIGTAP)', grupo:'SIA-SUS', campos:[{k:'codigo', r:'Código SIGTAP', obr:true, unico:true, dica:'10 dígitos'},{k:'nome', r:'Procedimento', obr:true, w:3},{k:'instrumento', r:'Instrumento de registro', t:'sel', op:['BPA-C','BPA-I','APAC','RAAS','e-SUS APS','NÃO SE APLICA'], padrao:'BPA-C'},{k:'valor', r:'Valor SUS (R$)', t:'moeda'},{k:'sexo', r:'Sexo', t:'sel', op:[['A','Ambos'],['F','Feminino'],['M','Masculino']], padrao:'A'},{k:'idadeMin', r:'Idade mínima', t:'int'},{k:'idadeMax', r:'Idade máxima', t:'int'},{k:'grupo', r:'Grupo', t:'sel', op:[['01','01 Promoção e prevenção'],['02','02 Finalidade diagnóstica'],['03','03 Clínicos'],['04','04 Cirúrgicos'],['05','05 Transplantes'],['06','06 Medicamentos'],['07','07 Órteses e próteses'],['08','08 Ações complementares']]},{k:'exigeCid', r:'Exige CID', t:'sim'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['codigo','Código'],['nome','Procedimento'],['instrumento','Instrumento'],['valor','Valor']], busca:['codigo','nome'], importar:true, ajuda:'Importe a Tabela Unificada do SIGTAP: arquivo <b>tb_procedimento.txt</b> da competência (DATASUS → SIGTAP → Tabela Unificada → download), ou uma planilha com Código e Nome. Os códigos iniciais são sugestões — <b>confira na tabela vigente</b>.'},
@@ -2152,7 +2157,7 @@ function viewCad(cadId, o){
       </div>
       <div class="actions">
         ${edit?`<button class="btn" onclick="cadAbrir('${cadId}')">+ Novo</button>`:''}
-        ${edit&&cad.importar?`<button class="btn secondary" onclick="cadImportarAbrir('${cadId}')">⭱ Importar</button>`:''}
+        ${edit&&cad.importar?`<button class="btn secondary" onclick="importarAbrir('${cadId}')">⭱ Importar</button>`:''}
         <button class="btn secondary" onclick="cadImprimir('${cadId}')">🖨️ Imprimir</button>
         <button class="btn secondary" onclick="cadExcel('${cadId}')">⭳ Excel</button>
       </div>
@@ -4500,7 +4505,7 @@ VIEWS.painel=()=>{
   const semReg=lista('agendamentos').filter(a=>a.data<hoje && a.data>=addDias(hoje,-7) && ['agendado','confirmado'].includes(a.situacao)).length; if(semReg) alertas.push(['neutro',`${semReg} agendamento(s) dos últimos 7 dias sem registro de chegada ou falta.`, 'agenda']);
   const pos=lista('atendimentos').filter(a=>a.data<hoje && a.data>=addDias(hoje,-30) && !a.posLancada && !['faltou','cancelado','evadiu'].includes(a.status)).length; if(pos) alertas.push(['neutro',`${pos} ficha(s) dos últimos 30 dias sem pós-consulta lançada (não entram no BPA).`, 'posConsulta']);
   const ausenc=avisoAgendadosEmAusencia();
-  return `${isAdmin()&&faltam.length?`<div class="card" style="border-left:4px solid var(--amber);"><h2>🚀 Primeiros passos para colocar o sistema em uso</h2><div class="subtitle">Faltam ${faltam.length} de ${passos.length} etapas.</div><div class="grid cols-3">${passos.map(p=>`<div class="flexrow" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;"><span>${p[1]?'✅':'⬜'} ${esc(p[0])}</span>${!p[1]?`<button class="btn small" onclick="goto('${p[2]}')">ir</button>`:''}</div>`).join('')}</div></div>`:''}
+  return `${isAdmin()&&faltam.length?`<div class="card" style="border-left:4px solid var(--amber);"><h2>🚀 Primeiros passos para colocar o sistema em uso</h2><div class="subtitle">Faltam ${faltam.length} de ${passos.length} etapas.</div><div class="grid cols-3">${passos.map(p=>`<div class="flexrow" style="border:1px solid var(--line);border-radius:8px;padding:8px 10px;"><span>${p[1]?'✅':'⬜'} ${esc(p[0])}</span>${!p[1]?`<button class="btn small" onclick="goto('${p[2]}')">ir</button>`:''}</div>`).join('')}</div><div class="actions mt"><button class="btn secondary" onclick="goto('importacao')">📥 Já tem unidades, profissionais e pacientes em outro sistema (Fiorilli, e-SUS, CNES)? Importe de uma vez</button></div></div>`:''}
   ${MODO_DEMO?'<div class="alerta-aviso">🎓 Você está no <b>modo demonstração</b>: os dados são fictícios e ficam só neste computador. Fique à vontade para testar todas as telas.</div>':''}
   <div class="grid cols-6 mb">${st('Na fila agora', naFila.length, nomeDe('unidades',UNIDADE_ATUAL)||'', 'alerta','recepcao')}${st('Atendidos hoje', fila.filter(a=>a.status==='finalizado').length, fila.length+' ficha(s) abertas','','fichas')}${st('Agendados hoje', agHoje.length, agHoje.filter(a=>['chegou','atendido'].includes(a.situacao)).length+' chegaram · '+agHoje.filter(a=>a.situacao==='faltou').length+' faltas','azul','agenda')}${st('Em observação', lista('atendimentos').filter(a=>a.status==='observacao').length,'','perigo','observacao')}${st('Atendimentos no mês', fmtNum(atMes.length), fmtMes(mes),'','relatorios')}${st('Pacientes ativos', fmtNum(lista('pacientes').filter(p=>!p.situacao||p.situacao==='ativo').length),'','roxo','pacientes')}</div>
   <div class="grid cols-6 mb">${st('Lista de espera', le.length,'','', 'listaEspera')}${st('Guias em aberto', encAb.length, encPar.length+' paradas','alerta','encaminhamentos')}${st('Vacinas no mês', vacMes,'','azul','vacinacao')}${st('Vacinas em atraso', vacAtr,'','perigo','agendaVacinas')}${clin?st('Gestantes em pré-natal', gest.length, gest.filter(g=>g.risco==='ALTO RISCO').length+' alto risco','roxo','prenatal'):''}${clin?st('Hiperdia em atraso', hipAtr,'','alerta','hiperdia'):''}</div>
@@ -5971,6 +5976,511 @@ SEED_EXTRAS.especialidadesLab=async function(){
   const novos=[['223415','FARMACÊUTICO ANALISTA CLÍNICO'],['221205','BIOMÉDICO'],['324205','TÉCNICO EM PATOLOGIA CLÍNICA'],['515215','AUXILIAR DE LABORATÓRIO DE ANÁLISES CLÍNICAS']].filter(x=>!tem.has(x[0])).map(x=>({cbo:x[0], nome:x[1], ativo:true}));
   if(novos.length) await salvarLote('especialidades', novos);
 };
+
+
+/* ============================================================
+   IMPORTAR DE OUTROS SISTEMAS
+   Traz os cadastros que o município já tem (Fiorilli SIS, e-SUS APS,
+   CNES, planilhas, copiar-e-colar) sem digitar de novo.
+   Regras: quem já existe é reconhecido pela chave (CPF, CNS, CNES, CBO,
+   código...) e NUNCA é trocado — no máximo ganha os campos que estavam
+   em branco. Cada importação fica no histórico e pode ser desfeita
+   (só apaga o que ela criou e que ninguém usou nem alterou depois).
+   ============================================================ */
+(function(){
+  const g=MENU.find(x=>x.g==='1. Cadastros Gerais'); if(!g) return;
+  const it={id:'importacao', r:'Importar de Outros Sistemas', ic:'📥', admin:true, d:'Traga pacientes, profissionais, unidades, CBO, bairros, ruas, destinos, medicamentos e exames do Fiorilli SIS, e-SUS, CNES ou de planilhas — sem duplicar o que já existe.'};
+  g.itens.splice(1,0,it); it.grupo=g.g; MENU_ITENS[it.id]=it;
+  const ip=MENU_ITENS.importarPacientes; if(ip) ip.d='Traga os pacientes do Fiorilli SIS, e-SUS (XML), CADSUS ou de planilhas, sem duplicar quem já existe.';
+})();
+
+/* ---------------- Conversões ---------------- */
+function impCompacto(s){ return norm(s).replace(/[^A-Z0-9]/g,''); }
+function impData(v){
+  if(v===undefined||v===null||v==='') return '';
+  if(v instanceof Date && !isNaN(v)) return isoDeData(v);
+  const s=String(v).trim();
+  if(/^-?\d{9,13}$/.test(s)){ const d=new Date(Number(s)); if(!isNaN(d) && d.getUTCFullYear()>1850 && d.getUTCFullYear()<2100) return d.getUTCFullYear()+'-'+pad2(d.getUTCMonth()+1)+'-'+pad2(d.getUTCDate()); }  /* e-SUS: milissegundos desde 1970 (negativo antes disso) */
+  const m=s.match(/^(\d{4})(\d{2})(\d{2})(T|\s|$)/); if(m && Number(m[2])>=1 && Number(m[2])<=12 && Number(m[3])>=1 && Number(m[3])<=31) return m[1]+'-'+m[2]+'-'+m[3];  /* XML do Delphi/Fiorilli: AAAAMMDD */
+  return dataPlanilhaISO(s);
+}
+const IMP_ESUS={sexo:{'0':'M','1':'F'}, raca:{'1':'01','2':'02','3':'03','4':'04','5':'05','6':'99'}};
+function impConv(t, v, ctx){
+  if(v===undefined||v===null) v=''; let s=String(v).trim();
+  switch(t){
+    case 'nome': return s.toUpperCase().replace(/\s+/g,' ');
+    case 'maiusc': return s.toUpperCase().replace(/\s+/g,' ');
+    case 'data': return impData(v);
+    case 'sexo': { if(ctx&&ctx.esus && IMP_ESUS.sexo[s]!==undefined) return IMP_ESUS.sexo[s]; const x=norm(s); return x.startsWith('F')||x==='2'?'F':x.startsWith('M')||x==='1'?'M':''; }
+    case 'raca': { if(ctx&&ctx.esus && IMP_ESUS.raca[s]) return IMP_ESUS.raca[s]; const x=norm(s); const n=RACAS.find(r=>norm(r[1])===x||norm(r[1]).startsWith(x)&&x.length>=4); if(n) return n[0]; const d=soDigitos(s); if(d){ const c=d==='99'?'99':pad2(Number(d)); if(RACAS.some(r=>r[0]===c)) return c; } return ''; }
+    case 'cns': { const d=soDigitos(s); return d.length===15 && validaCNS(d) ? d : ''; }
+    case 'cpf': { let d=soDigitos(s); if(d.length>=9 && d.length<11) d=d.padStart(11,'0'); return d.length===11 && validaCPF(d) ? d : ''; }
+    case 'tel': { let d=soDigitos(s); if(d.length>=11 && d[0]==='0') d=d.slice(1); return d.length>=8 ? d : ''; }
+    case 'cep': { const d=soDigitos(s); return d.length>=7 && d.length<=8 ? d.padStart(8,'0') : ''; }
+    case 'email': return /\S+@\S+\.\S+/.test(s) ? s.toLowerCase() : '';
+    case 'uf': { const x=norm(s).slice(0,2); return UFS.includes(x) ? x : ''; }
+    case 'int': { const n=numBR(s); return n===null ? null : Math.round(n); }
+    case 'num': case 'moeda': return numBR(s);
+    case 'sim': { const x=norm(s); if(/^(S|SIM|1|TRUE|X|VERDADEIRO|Y|YES|ATIVO|A)$/.test(x)) return true; if(/^(N|NAO|0|FALSE|F|FALSO|INATIVO|I)$/.test(x)) return false; return undefined; }
+    case 'cnes': { const d=soDigitos(s); return d.length>=5 && d.length<=7 ? d.padStart(7,'0') : ''; }
+    case 'cbo': return norm(s).replace(/[^A-Z0-9]/g,'').slice(0,6);
+    case 'sigtap': { const d=soDigitos(s); return d.length===10 ? d : ''; }
+    default: return s;
+  }
+}
+function impVazio(v){ return v===undefined||v===null||v===''||(Array.isArray(v)&&!v.length); }
+
+/* ---------------- O que pode ser importado ---------------- */
+const IMP_CBO_CONSELHO=[['2251','CRM'],['2252','CRM'],['2253','CRM'],['2231','CRM'],['2235','COREN'],['3222','COREN'],['2232','CRO'],['3224','CRO'],['2515','CRP'],['2236','CREFITO'],['2237','CRN'],['2234','CRF'],['2238','CRFa'],['2516','CRESS'],['2212','CRBM']];
+function impTipoPorCbo(cbo){ const c=String(cbo||''); if(/^(2251|2252|2253|2231)/.test(c)) return 'medico'; if(/^5151/.test(c)) return 'acs'; if(/^2/.test(c)) return 'superior'; if(/^3/.test(c)) return 'tecnico'; return c?'outro':''; }
+function impTipoUnidade(s){ const x=norm(s); if(!x) return ''; const op=CADS.unidades.campos.find(c=>c.k==='tipo').op; const d=op.find(o=>norm(o)===x); if(d) return d;
+  const r=[[/FAMILIA|ESF|PSF/,'ESTRATÉGIA SAÚDE DA FAMÍLIA'],[/BASICA|UBS|POSTO|CENTRO DE SAUDE/,'UNIDADE BÁSICA DE SAÚDE'],[/PRONTO|URGENCIA|UPA/,'PRONTO ATENDIMENTO'],[/CAPS|PSICOSSOCIAL/,'CAPS'],[/ESPECIALI|AMBULATORIO/,'CENTRO DE ESPECIALIDADES'],[/REABILIT|FISIO/,'CENTRO DE REABILITAÇÃO'],[/POLICLIN/,'POLICLÍNICA'],[/HOSPITAL/,'HOSPITAL'],[/LABORAT|ANALISES/,'LABORATÓRIO'],[/REGULA/,'CENTRAL DE REGULAÇÃO'],[/VIGILAN/,'VIGILÂNCIA EM SAÚDE']].find(p=>p[0].test(x)); return r?r[1]:'OUTRO'; }
+function impTipoLocal(s){ const x=norm(s); if(!x) return ''; const op=CADS.locais.campos.find(c=>c.k==='tipo').op; const d=op.find(o=>norm(o)===x); if(d) return d;
+  const r=[[/HOSPITAL|SANTA CASA/,'HOSPITAL'],[/AME|ESPECIALI/,'AME / CENTRO DE ESPECIALIDADES'],[/CLINICA/,'CLÍNICA'],[/LABORAT/,'LABORATÓRIO'],[/IMAGEM|RAIO|TOMOGRA|RESSONAN|ULTRAS/,'SERVIÇO DE IMAGEM'],[/CAPS/,'CAPS'],[/CONSORCIO/,'CONSÓRCIO'],[/REFERENCIA/,'UNIDADE DE REFERÊNCIA']].find(p=>p[0].test(x)); return r?r[1]:'OUTRO'; }
+/* Referências (CBO → especialidade, CNES → unidade...): acha o que existe ou prepara um cadastro novo */
+function impRefPor(ctx, tab, chave, valor, novo){
+  const k=chave+':'+valor; ctx.idx[tab]=ctx.idx[tab]||{};
+  if(!ctx.idx[tab][chave]){ const m=new Map(); lista(tab).forEach(r=>{ const v=chave==='nome'?norm(r.nome):String(r[chave]||''); if(v && !m.has(v)) m.set(v, r); }); ctx.idx[tab][chave]=m; }
+  const ex=ctx.idx[tab][chave].get(valor); if(ex) return ex;
+  ctx.aux[tab]=ctx.aux[tab]||new Map(); if(ctx.aux[tab].has(k)) return ctx.aux[tab].get(k);
+  if(!novo) return null;
+  const r=Object.assign({id:uid(), ativo:true}, novo); ctx.aux[tab].set(k, r); return r;
+}
+const IMP_ALVOS={
+  pacientes:{titulo:'Pacientes', ic:'🧑', tab:'pacientes', view:'importarPacientes', ordem:3, xml:/cadastroIndividual|paciente|cidadao|^ROW$/i,
+    dica:'Chave: CPF, CNS ou nome + nascimento. A matrícula do SIS é mantida quando não estiver em uso.',
+    campos:[
+      {k:'nome', r:'Nome', t:'nome', obr:true, sin:['NOME','NOME DO PACIENTE','PACIENTE','NOME COMPLETO','NOMECIDADAO','NOME_PACIENTE','NM_PACIENTE','NO_CIDADAO','NOMEPACIENTE','NOME_CIDADAO']},
+      {k:'nascimento', r:'Nascimento', t:'data', sin:['DATANASCIMENTO','NASCIMENTO','DATA NASCIMENTO','DATA DE NASCIMENTO','DT_NASC','DTNASC','DATA NASC','DATANASCIMENTOCIDADAO','DTNASCTO','DT_NASCIMENTO','DATA_NASCIMENTO','DT_NASCTO']},
+      {k:'sexo', r:'Sexo', t:'sexo', sin:['SEXO','SEXOCIDADAO','CO_SEXO','SEXO_PACIENTE','TP_SEXO']},
+      {k:'mae', r:'Mãe', t:'nome', sin:['MAE','NOME DA MAE','NOME MAE','NOMEMAE','NOMEMAECIDADAO','NOME_MAE','NM_MAE','NO_MAE']},
+      {k:'pai', r:'Pai', t:'nome', sin:['PAI','NOME DO PAI','NOMEPAI','NOMEPAICIDADAO','NOME_PAI','NM_PAI']},
+      {k:'cns', r:'CNS', t:'cns', sin:['NCARTAO','CNS','CARTAO SUS','CARTAO NACIONAL','CARTAO','CNSCIDADAO','CNS_PACIENTE','NU_CNS','CARTAO_SUS','NUMERO_CNS']},
+      {k:'cpf', r:'CPF', t:'cpf', sin:['CPF','CPFCIDADAO','NU_CPF','CPF_PACIENTE']},
+      {k:'rg', r:'RG', sin:['RG','IDENTIDADE','NU_RG']},
+      {k:'nis', r:'NIS / PIS', sin:['NIS','PIS','NUMERONISPISPASEP','NU_NIS']},
+      {k:'nomeSocial', r:'Nome social', t:'nome', sin:['NOMESOCIAL','NOME SOCIAL','NOME_SOCIAL']},
+      {k:'raca', r:'Raça/cor', t:'raca', sin:['RACA','RACA/COR','COR','RACACORCIDADAO','RACA_COR','CD_RACA','CO_RACA']},
+      {k:'logradouro', r:'Endereço', t:'maiusc', sin:['ENDERECO','LOGRADOURO','RUA','NOMELOGRADOURO','ENDERECO_PACIENTE','DS_LOGRADOURO','ESUS_LOGRADOURO']},
+      {k:'numero', r:'Número', sin:['NUMERO','N END','NR','NUM','NUMERO_ENDERECO','NU_NUMERO','ESUS_NUMERO']},
+      {k:'complemento', r:'Complemento', sin:['COMPLEMENTO','ESUS_COMPLEMENTO']},
+      {k:'bairro', r:'Bairro', t:'maiusc', sin:['BAIRRO','NO_BAIRRO','DS_BAIRRO','ESUS_BAIRRO']},
+      {k:'municipio', r:'Município', t:'maiusc', sin:['MUNICIPIO','CIDADE','NO_MUNICIPIO']},
+      {k:'uf', r:'UF', t:'uf', sin:['UF','ESTADO','SG_UF']},
+      {k:'cep', r:'CEP', t:'cep', sin:['CEP','NU_CEP','COD_CEP','ESUS_CEP']},
+      {k:'celular', r:'Celular', t:'tel', sin:['CELULAR','TELEFONE CELULAR','TELEFONECELULAR','TEL_CELULAR','NU_CELULAR']},
+      {k:'telefone', r:'Telefone', t:'tel', sin:['FONE','TELEFONE','TEL','TELEFONERESIDENCIA','TELEFONE_RESIDENCIAL','NU_TELEFONE','ESUS_TELEFONE']},
+      {k:'telRecado', r:'Telefone recado', t:'tel', sin:['FONE1','TELEFONECONTATO','TELEFONE_RECADO','FONE_RECADO']},
+      {k:'email', r:'E-mail', t:'email', sin:['EMAIL','E-MAIL','EMAILCIDADAO']},
+      {k:'segmento', r:'Segmento', sin:['SEGMENTO','SEGTO']},
+      {k:'area', r:'Área', sin:['AREA']},
+      {k:'microarea', r:'Microárea', sin:['MICROAREA','M AREA','MICRO AREA']},
+      {k:'familia', r:'Família', sin:['FAMILIA']},
+      {k:'prontuario', r:'Prontuário físico', sin:['PRONTUARIO_FISICO','PRONT FISICO','PRONTUARIO','NUMEROPRONTUARIO']},
+      {k:'matriculaArq', r:'Matrícula do outro sistema', sin:['NMATRICULA','MATRICULA','CD_PACIENTE']},
+    ],
+    chaves:r=>[r.cpf&&'cpf:'+r.cpf, r.cns&&'cns:'+r.cns, r.nome&&r.nascimento&&'nn:'+norm(r.nome)+'|'+r.nascimento, r.nome&&r.mae&&!/DESCONHEC|IGNORAD|NAO CONSTA|SEM INFORMA|NAO INFORMAD/.test(norm(r.mae))&&'nm:'+norm(r.nome)+'|'+norm(r.mae)],
+    montar(r, o, ctx){
+      r.municipio=r.municipio||(r.logradouro||r.bairro?String(cfgEnt().cidade||'').toUpperCase():''); r.uf=r.uf||(r.municipio?cfgEnt().uf||'':'');
+      r.situacao='ativo'; r.origem='Importado de '+ctx.nomeArquivo;
+      if(ctx.esus){ const c=[]; const sim=k=>String(o[k]||'').toLowerCase()==='true';
+        [['statusTemHipertensaoArterial','HIPERTENSO'],['statusTemDiabetes','DIABÉTICO'],['statusEhGestante','GESTANTE'],['statusEhAcamado','ACAMADO'],['statusEhDomiciliado','DOMICILIADO'],['statusEhFumante','TABAGISTA'],['statusEhDependenteAlcool','USO DE ÁLCOOL'],['statusEhDependenteOutrasDrogas','USO DE OUTRAS DROGAS'],['statusTemDoencaRespiratoria','DOENÇA RESPIRATÓRIA'],['statusTeveDoencaCardiaca','DOENÇA CARDÍACA'],['statusTemTeveDoencasRins','DOENÇA RENAL'],['statusTemTeveCancer','CÂNCER'],['statusTemTuberculose','TUBERCULOSE'],['statusTemHanseniase','HANSENÍASE'],['statusSituacaoRua','SITUAÇÃO DE RUA'],['statusDiagnosticoMental','SAÚDE MENTAL']].forEach(([k,cond])=>{ if(sim(k)) c.push(cond); });
+        if(c.length) r.condicoes=c;
+        const sai=String(o.motivoSaidaCidadao||''); if(sai==='135') r.situacao='obito'; else if(sai==='136') r.situacao='mudou';
+      }
+      if(r.matriculaArq) r.matriculaArq=soDigitos(r.matriculaArq);
+    },
+    validar:r=>!r.nome||r.nome.length<3?'sem nome':'',
+    avisos:r=>[!r.nascimento&&'sem nascimento', !r.sexo&&'sem sexo', !r.cns&&!r.cpf&&'sem CNS/CPF'].filter(Boolean),
+    async preparar(novos, opc){
+      const usados=new Set(lista('pacientes').map(p=>String(p.matricula||'')));
+      let maxMat=Math.max(0, ...lista('pacientes').map(p=>Number(p.matricula)||0)); const semMat=[];
+      novos.forEach(r=>{ const m=r.matriculaArq; delete r.matriculaArq; if(opc.usarMatricula && m && !usados.has(m.padStart(6,'0'))){ r.matricula=m.padStart(6,'0'); usados.add(r.matricula); maxMat=Math.max(maxMat, Number(m)); } else semMat.push(r); });
+      if(semMat.length){ const base=Math.max(maxMat, Number(await proximoNumero('matricula'))-1); semMat.forEach((r,i)=>{ r.matricula=String(base+1+i).padStart(6,'0'); }); maxMat=base+semMat.length; }
+      await ajustarContador('matricula', maxMat);
+    },
+    prev:[['nome','Nome'],['nascimento','Nascimento'],['sexo','Sexo'],['cns','CNS'],['cpf','CPF'],['mae','Mãe'],['bairro','Bairro']]},
+  profissionais:{titulo:'Profissionais', ic:'👩‍⚕️', tab:'profissionais', view:'profissionais', ordem:2, xml:/prof|medico|^ROW$/i,
+    dica:'Chave: CNS, CPF, código do SIS ou nome. O CBO vira a especialidade; o CNES (ou o nome da unidade) liga às unidades.',
+    campos:[
+      {k:'nome', r:'Nome', t:'nome', obr:true, sin:['NM_PROF','NOME_PROFISSIONAL','NOME_PROF','NO_PROFISSIONAL','NOMEPROFISSIONAL','NM_PROFISSIONAL','NOME_MEDICO','PROFISSIONAL','MEDICO','NOME']},
+      {k:'cns', r:'CNS', t:'cns', sin:['CNS','CNS_MEDICO','CNS_PROFISSIONAL','CNS_PROF','COD_CNS','CO_CNS','NU_CNS','CARTAO_SUS','NCARTAO','PROFISSIONALCNS']},
+      {k:'cpf', r:'CPF', t:'cpf', sin:['CPF','CPF_PROF','CPF_MEDICO','CO_CPF','NU_CPF','CPF_PROFISSIONAL']},
+      {k:'cbo', r:'CBO', t:'cbo', aux:true, sin:['CBO','CD_CBO','COD_CBO','CO_CBO','CBO_PRINCIPAL','CODIGO_CBO','CBOCODIGO_2002','NU_CBO']},
+      {k:'cboNome', r:'Ocupação (nome do CBO)', t:'maiusc', aux:true, sin:['DE_CBO','DESCRICAO_CBO','DS_CBO','NO_CBO','DESC_CBO','NOME_CBO','OCUPACAO','ESPECIALIDADE','CARGO','FUNCAO']},
+      {k:'conselho', r:'Conselho', aux:true, sin:['CONSELHO','TP_CONSELHO','SG_CONSELHO','ORGAO_CLASSE','TIPO_CONSELHO','ORGAO_EMISSOR']},
+      {k:'registro', r:'Nº do registro', sin:['REGISTRO','CRM','COREN','NU_REGISTRO','N_REGISTRO','NUMERO_CONSELHO','NR_CONSELHO','REGISTRO_CONSELHO','NU_CONSELHO','CONSELHO_NUMERO']},
+      {k:'ufConselho', r:'UF do registro', t:'uf', aux:true, sin:['UF_CONSELHO','SG_UF_CONSELHO','UF_REGISTRO','UF_CRM']},
+      {k:'cnes', r:'CNES da unidade', aux:true, sin:['CNES','CD_CNES','CO_CNES','COD_CNES','CNES_UNIDADE','CNESDADOSERIALIZADO']},
+      {k:'unidadeCodigo', r:'Código da unidade no SIS', aux:true, sin:['CD_UNIDADE','COD_UNIDADE','CODIGO_UNIDADE']},
+      {k:'unidadeNome', r:'Nome da unidade', t:'maiusc', aux:true, sin:['UNIDADE','NOME_UNIDADE','NOMEFANTASIA','NOME_FANTASIA','NOME_FANTA','NO_FANTASIA','ESTABELECIMENTO']},
+      {k:'codigoSIS', r:'Código no outro sistema', sin:['CD_MEDICO','COD_MEDICO','CD_PROFISSIONAL','COD_PROFISSIONAL','CODIGO','ID_PROFISSIONAL']},
+      {k:'telefone', r:'Telefone', t:'tel', sin:['TELEFONE','FONE','CELULAR','FONE1','NU_TELEFONE']},
+      {k:'email', r:'E-mail', t:'email', sin:['EMAIL','E-MAIL']},
+      {k:'ativo', r:'Ativo', t:'sim', sin:['ATIVO','SITUACAO','STATUS','FL_ATIVO']},
+    ],
+    chaves:r=>[r.cns&&'cns:'+r.cns, r.cpf&&'cpf:'+r.cpf, r.codigoSIS&&'sis:'+norm(r.codigoSIS), r.nome&&'nome:'+norm(r.nome)],
+    montar(r, o, ctx){
+      if(r.cbo || r.cboNome){
+        const esp = r.cbo ? impRefPor(ctx, 'especialidades', 'cbo', r.cbo, {cbo:r.cbo, nome:r.cboNome||('OCUPAÇÃO CBO '+r.cbo)}) : impRefPor(ctx, 'especialidades', 'nome', norm(r.cboNome), null);
+        if(esp) r.especialidadeId=esp.id;
+      }
+      const uns=[]; const avisos=[];
+      const cnesLista=String(r.cnes||'').split(/[;,/|\s]+/).map(c=>impConv('cnes',c)).filter(Boolean);
+      cnesLista.forEach(c=>{ const u=impRefPor(ctx,'unidades','cnes',c, r.unidadeNome && cnesLista.length===1 ? {nome:r.unidadeNome, cnes:c, usaTriagem:true} : null); if(u) uns.push(u.id); else avisos.push('CNES '+c+' não cadastrado'); });
+      if(!uns.length && r.unidadeCodigo){ const u=impRefPor(ctx,'unidades','codigoSIS',String(r.unidadeCodigo).trim(),null); if(u) uns.push(u.id); }
+      if(!uns.length && r.unidadeNome){ const u=impRefPor(ctx,'unidades','nome',norm(r.unidadeNome),null); if(u) uns.push(u.id); else avisos.push('unidade "'+r.unidadeNome+'" não cadastrada'); }
+      if(uns.length) r.unidades=unicos(uns);
+      r.tipo=impTipoPorCbo(r.cbo) || 'outro';
+      const cons = r.conselho ? (CADS.profissionais.campos.find(c=>c.k==='conselho').op.find(x=>norm(r.conselho).includes(norm(x))) || 'OUTRO') : ((IMP_CBO_CONSELHO.find(x=>String(r.cbo||'').startsWith(x[0]))||[])[1]||'');
+      if(r.registro){ r.registro=String(r.registro).trim(); if(r.ufConselho && !r.registro.includes('/')) r.registro+='/'+r.ufConselho; if(cons) r.conselho=cons; else delete r.conselho; } else delete r.conselho;
+      if(r.ativo===undefined) r.ativo=true; r.agenda=r.tipo!=='acs'; r.tempoConsulta=15;
+      r._avisos=avisos; delete r.cbo; delete r.cboNome; delete r.cnes; delete r.unidadeCodigo; delete r.unidadeNome; delete r.ufConselho;
+    },
+    validar:r=>!r.nome||r.nome.length<3?'sem nome':'',
+    avisos:r=>[!r.especialidadeId&&'sem CBO', !r.cns&&'sem CNS (obrigatório no BPA)', !(r.unidades||[]).length&&'sem unidade'].filter(Boolean),
+    prev:[['nome','Nome'],['cns','CNS'],['especialidadeId','CBO / especialidade'],['registro','Registro'],['unidades','Unidades']]},
+  unidades:{titulo:'Unidades de saúde', ic:'🏥', tab:'unidades', view:'unidades', ordem:1, xml:/estabelec|unidade|^ROW$/i,
+    dica:'Chave: CNES, código do SIS ou nome. Comece por aqui — profissionais e pacientes se ligam às unidades.',
+    campos:[
+      {k:'nome', r:'Nome', t:'maiusc', obr:true, sin:['NOMEFANTASIA','NOME_FANTASIA','NOME_FANTA','NO_FANTASIA','NOME_UNIDADE','DE_UNIDADE','UNIDADE','ESTABELECIMENTO','NOME','DESCRICAO']},
+      {k:'cnes', r:'CNES', t:'cnes', sin:['CNES','CD_CNES','CO_CNES','COD_CNES','CNES_UNIDADE','CNESDADOSERIALIZADO']},
+      {k:'tipo', r:'Tipo', aux:true, sin:['TIPO_UNIDADE','TP_UNIDADE','DS_TIPO_UNIDADE','TIPO_ESTABELECIMENTO','TP_UNID_ID','TIPO']},
+      {k:'razao', r:'Razão social', t:'maiusc', sin:['RAZAO_SOCIAL','R_SOCIAL','RAZAO','NO_RAZAO_SOCIAL','MANTENEDORA']},
+      {k:'cnpj', r:'CNPJ', sin:['CNPJ','NU_CNPJ','CNPJ_MANTENEDORA']},
+      {k:'telefone', r:'Telefone', t:'tel', sin:['TELEFONE','FONE','NU_TELEFONE']},
+      {k:'endereco', r:'Endereço', t:'maiusc', sin:['ENDERECO','LOGRADOURO','NO_LOGRADOURO']},
+      {k:'numero', r:'Número', sin:['NUMERO','NU_ENDERECO','NU_NUMERO']},
+      {k:'bairro', r:'Bairro', t:'maiusc', sin:['BAIRRO','NO_BAIRRO']},
+      {k:'responsavel', r:'Responsável', t:'maiusc', sin:['RESPONSAVEL','DIRETOR','RESPONSAVEL_TECNICO']},
+      {k:'codigoSIS', r:'Código no outro sistema', sin:['CD_UNIDADE','COD_UNIDADE','CODIGO','ID_UNIDADE']},
+      {k:'ativo', r:'Ativa', t:'sim', sin:['ATIVO','ATIVA','SITUACAO','STATUS']},
+    ],
+    chaves:r=>[r.cnes&&'cnes:'+r.cnes, r.codigoSIS&&'sis:'+norm(r.codigoSIS), r.nome&&'nome:'+norm(r.nome)],
+    montar(r){ r.tipo=impTipoUnidade(r.tipo); if(!r.tipo) delete r.tipo; if(r.cnpj) r.cnpj=soDigitos(r.cnpj); else delete r.cnpj; if(r.ativo===undefined) r.ativo=true; r.usaTriagem=true; },
+    validar:r=>!r.nome?'sem nome':'', avisos:r=>[!r.cnes&&'sem CNES'].filter(Boolean),
+    prev:[['nome','Nome'],['cnes','CNES'],['tipo','Tipo'],['telefone','Telefone'],['bairro','Bairro']]},
+  especialidades:{titulo:'Especialidades / CBO', ic:'🎓', tab:'especialidades', view:'tabelas', ordem:4, xml:/cbo|ocupa|especial|^ROW$/i, dica:'Chave: código CBO.',
+    campos:[{k:'cbo', r:'CBO', t:'cbo', obr:true, sin:['CBO','CD_CBO','COD_CBO','CO_CBO','CODIGO_CBO','CODIGO','CO_OCUPACAO']},{k:'nome', r:'Ocupação', t:'maiusc', obr:true, sin:['DE_CBO','DESCRICAO','NOME','OCUPACAO','ESPECIALIDADE','DS_CBO','NO_OCUPACAO','TITULO']}],
+    chaves:r=>[r.cbo&&'cbo:'+r.cbo], validar:r=>!r.cbo?'sem CBO':!r.nome?'sem nome':'', prev:[['cbo','CBO'],['nome','Ocupação']]},
+  locais:{titulo:'Outras entidades (destinos)', ic:'🏢', tab:'locais', view:'locais', ordem:5, xml:/local|destino|entidade|prestador|^ROW$/i, dica:'Hospitais, AME, clínicas e laboratórios de fora. Chave: CNES, código ou nome + município.',
+    campos:[
+      {k:'nome', r:'Nome', t:'maiusc', obr:true, sin:['NOME','NOMEFANTASIA','NOME_FANTASIA','LOCAL','DESTINO','DESTINO_PRINCIPAL','ESTABELECIMENTO','PRESTADOR','DE_LOCAL','DESCRICAO','RAZAO_SOCIAL']},
+      {k:'tipo', r:'Tipo', aux:true, sin:['TIPO','TIPO_LOCAL','TP_PRESTADOR']}, {k:'cnes', r:'CNES', t:'cnes', sin:['CNES','CD_CNES','CO_CNES']},
+      {k:'municipio', r:'Município', t:'maiusc', sin:['MUNICIPIO','CIDADE','NO_MUNICIPIO']}, {k:'uf', r:'UF', t:'uf', sin:['UF','ESTADO']},
+      {k:'endereco', r:'Endereço', t:'maiusc', sin:['ENDERECO','LOGRADOURO']}, {k:'telefone', r:'Telefone', t:'tel', sin:['TELEFONE','FONE']}, {k:'contato', r:'Contato', sin:['CONTATO','RESPONSAVEL']},
+      {k:'distanciaKm', r:'Distância (km)', t:'num', sin:['DISTANCIA','KM','DISTANCIA_KM']}, {k:'codigoSIS', r:'Código no outro sistema', sin:['CD_LOCAL','COD_LOCAL','CD_DESTINO','CODIGO','CD_LAB_EXTERNO','CD_CLINICA']},
+    ],
+    chaves:r=>[r.cnes&&'cnes:'+r.cnes, r.codigoSIS&&'sis:'+norm(r.codigoSIS), r.nome&&'nome:'+norm(r.nome)+'|'+norm(r.municipio||'')],
+    montar(r){ r.tipo=impTipoLocal(r.tipo); if(!r.tipo) delete r.tipo; r.ativo=true; }, validar:r=>!r.nome?'sem nome':'', avisos:r=>[!r.municipio&&'sem município'].filter(Boolean),
+    prev:[['nome','Nome'],['tipo','Tipo'],['municipio','Município'],['uf','UF'],['telefone','Telefone']]},
+  bairros:{titulo:'Bairros', ic:'🏘️', tab:'bairros', view:'enderecos', ordem:6, xml:/bairro|^ROW$/i, dica:'Chave: nome.',
+    campos:[{k:'nome', r:'Bairro', t:'maiusc', obr:true, sin:['BAIRRO','NOME','DESCRICAO','NO_BAIRRO','DE_BAIRRO']},{k:'zona', r:'Zona', t:'maiusc', sin:['ZONA']},{k:'area', r:'Área (ESF)', sin:['AREA']}],
+    chaves:r=>[r.nome&&'nome:'+norm(r.nome)], montar(r){ if(r.zona && !['URBANA','RURAL'].includes(r.zona)) r.zona=/RUR/.test(norm(r.zona))?'RURAL':'URBANA'; r.ativo=true; }, validar:r=>!r.nome?'sem nome':'', prev:[['nome','Bairro'],['zona','Zona'],['area','Área']]},
+  logradouros:{titulo:'Ruas (logradouros)', ic:'🛣️', tab:'logradouros', view:'enderecos', ordem:7, xml:/logradouro|rua|^ROW$/i, dica:'Chave: tipo + nome.',
+    campos:[{k:'tipo', r:'Tipo', t:'maiusc', sin:['TIPO','TIPO_LOGRADOURO','TP_LOGRADOURO','TIPOLOGRADOURO']},{k:'nome', r:'Logradouro', t:'maiusc', obr:true, sin:['LOGRADOURO','NOME','RUA','ENDERECO','DESCRICAO','NO_LOGRADOURO','DE_LOGRADOURO','NOMELOGRADOURO']},{k:'bairro', r:'Bairro', t:'maiusc', sin:['BAIRRO','NO_BAIRRO']},{k:'cep', r:'CEP', t:'cep', sin:['CEP','NU_CEP']}],
+    chaves:r=>[r.nome&&'log:'+norm(r.tipo||'')+'|'+norm(r.nome)],
+    montar(r){ const op=CADS.logradouros.campos.find(c=>c.k==='tipo').op; const ab={'R':'RUA','R.':'RUA','AV':'AVENIDA','AV.':'AVENIDA','TV':'TRAVESSA','TV.':'TRAVESSA','AL':'ALAMEDA','PC':'PRAÇA','PCA':'PRAÇA','PRACA':'PRAÇA','EST':'ESTRADA','ROD':'RODOVIA'};
+      if(r.tipo){ const t=norm(r.tipo); r.tipo=op.find(o=>norm(o)===t)||ab[t]||ab[t+'.']||'OUTRO'; }
+      else { const m=String(r.nome).match(/^(RUA|R\.|AVENIDA|AV\.?|TRAVESSA|TV\.?|ALAMEDA|PRA[CÇ]A|ESTRADA|RODOVIA)\s+(.+)$/i); if(m){ const t=norm(m[1]).replace(/\.$/,''); r.tipo=op.find(o=>norm(o)===t)||ab[t]||'OUTRO'; r.nome=m[2].trim(); } }
+      r.ativo=true; },
+    validar:r=>!r.nome?'sem nome':'', prev:[['tipo','Tipo'],['nome','Logradouro'],['bairro','Bairro'],['cep','CEP']]},
+  convenios:{titulo:'Convênios', ic:'🤝', tab:'convenios', view:'tabelas', ordem:8, xml:/conven|^ROW$/i, dica:'Chave: nome.',
+    campos:[{k:'nome', r:'Convênio', t:'maiusc', obr:true, sin:['CONVENIO','NOME','DESCRICAO','DE_CONVENIO','ABRV_CONVENIO']}], chaves:r=>[r.nome&&'nome:'+norm(r.nome)], montar(r){ r.ativo=true; }, validar:r=>!r.nome?'sem nome':'', prev:[['nome','Convênio']]},
+  medicamentos:{titulo:'Medicamentos (receitas)', ic:'💊', tab:'medicamentos', view:'tabelas', ordem:9, xml:/medicamento|produto|^ROW$/i, dica:'Para a lista de medicamentos da receita. Chave: nome.',
+    campos:[{k:'nome', r:'Medicamento', t:'maiusc', obr:true, sin:['MEDICAMENTO','DISC1','DESC1','PRODUTO','NOME','DESCRICAO','PRINCIPIO_ATIVO','DE_MEDICAMENTO']},{k:'apresentacao', r:'Apresentação', sin:['APRESENTACAO','UNID1','UNIDADE','FORMA','FORMA_FARMACEUTICA']},{k:'posologia', r:'Posologia padrão', sin:['POSOLOGIA']},{k:'quantidade', r:'Quantidade padrão', sin:['QUANTIDADE_PADRAO','QTD_PADRAO']}],
+    chaves:r=>[r.nome&&'nome:'+norm(r.nome)], montar(r){ r.ativo=true; r.rename=true; }, validar:r=>!r.nome?'sem nome':'', prev:[['nome','Medicamento'],['apresentacao','Apresentação']]},
+  labExames:{titulo:'Exames do laboratório', ic:'🧬', tab:'labExames', view:'labExames', ordem:10, xml:/exame|^ROW$/i, dica:'Catálogo do Módulo Laboratório. Chave: sigla ou nome. Exame novo entra com um parâmetro numérico — complete os parâmetros e valores de referência depois.',
+    campos:[{k:'sigla', r:'Sigla', t:'maiusc', obr:true, sin:['SIGLA','ABREVIACAO','DE_ABREVIACAO','ABREV','CD_EXAME','COD_EXAME']},{k:'nome', r:'Exame', t:'maiusc', obr:true, sin:['EXAME','DESCRICAO EXAME','DESCRICAO_EXAME','DE_EXAME','NM_EXAME','NOME','DESCRICAO']},{k:'sigtap', r:'Código SIGTAP', t:'sigtap', sin:['SIGTAP','COD. SUS','COD SUS','COD_SUS','CODIGO_SUS','CD_PROCED','PROCEDIMENTO']},{k:'grupo', r:'Grupo', t:'maiusc', aux:true, sin:['GRUPO','SUBGRUPO','NM_SUBGRUPOEXA','SETOR']},{k:'material', r:'Material', t:'maiusc', aux:true, sin:['MATERIAL','AMOSTRA','MATERIAL_BIOLOGICO']},{k:'prazoDias', r:'Prazo (dias)', t:'int', sin:['PRAZO','PRAZO_DIAS','PRAZO_ENTREGA']},{k:'vigenciaDias', r:'Vigência (dias)', t:'int', sin:['DIAS_VIGENCIA','VIGENCIA']},{k:'valor', r:'Valor', t:'num', sin:['VALOR','VLR_EXAME','VL_EXAME','VALOR_EXAME']},{k:'preparo', r:'Preparo', sin:['PREPARO','ORIENTACAO','ORIENTACOES']},{k:'apoio', r:'Laboratório de apoio', t:'sim', sin:['APOIO','TERCEIRIZADO','LABORATORIO_APOIO']}],
+    chaves:r=>[r.sigla&&'sigla:'+norm(r.sigla), r.nome&&'nome:'+norm(r.nome)],
+    montar(r, o, ctx){
+      if(r.grupo){ const g=impRefPor(ctx,'labGrupos','nome',norm(r.grupo),{nome:r.grupo, ordem:99}); r.grupoId=g.id; }
+      if(r.material){ const m=impRefPor(ctx,'labMateriais','nome',norm(r.material),{nome:r.material}); r.materialId=m.id; }
+      delete r.grupo; delete r.material; r.sigla=String(r.sigla||'').replace(/\s+/g,'').slice(0,12);
+      if(!r.prazoDias) r.prazoDias=1; if(r.apoio===undefined) r.apoio=false; r.tipoResultado='parametros'; r.ativo=true;
+      r.parametros=[{id:uid(), sigla:r.sigla, nome:r.nome, tipo:'num', unidade:'', casas:0, refs:[]}];
+    },
+    validar:r=>!r.sigla?'sem sigla':!r.nome?'sem nome':'', avisos:r=>[!r.grupoId&&'sem grupo'].filter(Boolean),
+    disponivel:()=>typeof LAB_VIEWS!=='undefined' && !!TABELAS.labExames,
+    prev:[['sigla','Sigla'],['nome','Exame'],['sigtap','SIGTAP'],['prazoDias','Prazo']]},
+};
+const IMP_FONTES=[
+  {id:'fiorilli', nome:'Fiorilli SIS', ic:'🟦', como:`No SIS, entre em <b>SIS_MENU › Utilitários › Exportar Tabela do Sistema</b>, escolha a tabela (pacientes, profissionais, unidades, bairros...) e salve em <b>.xml</b> ou <b>.txt</b>. Também serve exportar uma lista para Excel, ou selecionar as linhas da grade e copiar (Ctrl+C) para colar aqui. O app reconhece os nomes de campo do SIS (NOME, DATANASCIMENTO, NCARTAO, NMATRICULA, CD_MEDICO, NM_PROF, DE_CBO, CD_UNIDADE, NOMEFANTASIA...).`},
+  {id:'esus', nome:'e-SUS APS (XML)', ic:'🟩', como:`Use os arquivos <b>.esus.xml</b> ou o <b>.zip do lote</b> que o SIS (ou o e-SUS) gera para enviar ao SISAB — pode escolher vários de uma vez. Cada <b>Cadastro Individual</b> vira um paciente, com as condições de saúde; o <b>Cadastro Domiciliar</b> do mesmo lote completa o endereço da família.`},
+  {id:'cnes', nome:'CNES', ic:'🟨', como:`Arquivo <b>XML</b> exportado pelo SCNES (o mesmo que se importa no e-SUS PEC) ou planilha baixada na consulta do site do CNES. Serve para <b>unidades</b> e <b>profissionais</b> (CNS, CBO e unidade). Confira as colunas na etapa 3.`},
+  {id:'planilha', nome:'Planilha (Excel/CSV)', ic:'📊', como:`Qualquer planilha com uma linha de títulos: CADSUS, outro sistema, planilha feita à mão. Aceita .xlsx, .xls, .csv e .txt.`},
+  {id:'colar', nome:'Copiar e colar', ic:'📋', como:`Selecione as linhas na tela do outro sistema ou no Excel (com a linha de títulos), copie (Ctrl+C) e cole no quadro abaixo.`},
+];
+
+/* ---------------- Leitura dos arquivos ---------------- */
+let IMPX={alvo:'', fonte:'fiorilli', arquivos:[], tabela:null, xml:null, mapa:{}, semTitulo:false, completar:true, usarMatricula:true, filtro:'', esus:false, an:null, anChave:'', resultado:null, lendo:false};
+function impResetDados(){ Object.assign(IMPX, {arquivos:[], tabela:null, xml:null, mapa:{}, semTitulo:false, filtro:'', esus:false, an:null, anChave:'', resultado:null}); }
+function impTexto(buf){
+  const cab=new TextDecoder('latin1').decode(buf.slice(0,200)); const enc=(cab.match(/encoding=["']([^"']+)/i)||[])[1]||'';
+  if(/8859|1252|latin/i.test(enc)) return new TextDecoder('windows-1252').decode(buf);
+  const t=new TextDecoder('utf-8').decode(buf); return t.includes(String.fromCharCode(0xFFFD)) ? new TextDecoder('windows-1252').decode(buf) : t;
+}
+function impCarregarJSZip(){
+  if(window.JSZip) return Promise.resolve(window.JSZip);
+  return new Promise((ok,erro)=>{ const s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; s.onload=()=>ok(window.JSZip); s.onerror=()=>erro(new Error('não foi possível carregar o leitor de .zip (sem internet?)')); document.head.appendChild(s); });
+}
+async function impArquivos(ev){
+  const fs=[...(ev.target.files||[])]; ev.target.value=''; if(!fs.length) return;
+  IMPX.lendo=true; impResetDados(); render(true);
+  try{
+    const xmls=[], tabelas=[]; const nomes=[];
+    const tratar=async (nome, buf)=>{ const n=nome.toLowerCase();
+      if(n.endsWith('.zip')){ const Z=await impCarregarJSZip(); const z=await Z.loadAsync(buf); for(const e of Object.values(z.files)){ if(e.dir) continue; if(/\.(xml|csv|txt)$/i.test(e.name)) await tratar(e.name, await e.async('arraybuffer')); } return; }
+      if(n.endsWith('.xml')){ xmls.push({nome, txt:impTexto(buf)}); return; }
+      tabelas.push(await lerPlanilha(new File([buf], nome)));
+    };
+    for(const f of fs){ nomes.push(f.name); await tratar(f.name, await f.arrayBuffer()); }
+    IMPX.arquivos=nomes;
+    if(xmls.length) impLerXml(xmls);
+    else if(tabelas.length){ const t0=tabelas[0]; const iguais=tabelas.filter(t=>t.cab.join('|')===t0.cab.join('|')); IMPX.tabela={cab:t0.cab, linhas:iguais.flatMap(t=>t.linhas)}; if(iguais.length<tabelas.length) showToast((tabelas.length-iguais.length)+' arquivo(s) com colunas diferentes foram deixados de fora.','warning'); }
+    if(!IMPX.tabela || !IMPX.tabela.linhas.length){ showToast('Nenhum registro encontrado no(s) arquivo(s).','warning'); }
+    impAutoMapa();
+  }catch(e){ console.error(e); showToast('Não foi possível ler: '+(e.message||e),'error'); impResetDados(); }
+  finally{ IMPX.lendo=false; render(true); }
+}
+async function impColar(){
+  const t=(document.getElementById('impColado')||{}).value||''; if(!t.trim()){ showToast('Cole os dados no quadro.','warning'); return; }
+  impResetDados(); try{ IMPX.tabela=await lerPlanilha(new File([t],'colado.txt')); IMPX.arquivos=['dados colados']; impAutoMapa(); }catch(e){ showToast('Não foi possível ler: '+e.message,'error'); }
+  render(true);
+}
+/* XML de qualquer sistema: acha o elemento que se repete (o "registro") e transforma cada um numa linha */
+function impNomeLocal(el){ return el.localName || String(el.nodeName).replace(/^.*:/,''); }
+function impLerXml(xmls){
+  const docs=[]; let esus=false;
+  xmls.forEach(x=>{ const d=new DOMParser().parseFromString(x.txt.replace(/^﻿/,''), 'application/xml'); if(d.getElementsByTagName('parsererror').length) throw new Error('XML inválido em '+x.nome); docs.push(d); if(/esus\.ufsc\.br/.test(x.txt.slice(0,2000))) esus=true; });
+  const cont={};
+  docs.forEach(d=>{ if(impNomeLocal(d.documentElement)==='DATAPACKET'){ cont.ROW=(cont.ROW||0)+d.getElementsByTagName('ROW').length; return; }
+    /* candidato a "registro": elemento com dados próprios (atributos ou campos simples), não um simples agrupador */
+    d.querySelectorAll('*').forEach(el=>{ const n=impNomeLocal(el); const folhas=[...el.children].filter(c=>!c.children.length).length; const attrs=[...el.attributes].filter(a=>!/^xmlns/.test(a.name)).length; if(attrs>=2 || folhas>=2) cont[n]=(cont[n]||0)+1; }); });
+  const raiz=new Set(docs.map(d=>impNomeLocal(d.documentElement)));
+  const tags=Object.entries(cont).filter(([n])=>!raiz.has(n)||n==='ROW').sort((a,b)=>b[1]-a[1]).map(([tag,n])=>({tag,n}));
+  IMPX.esus=esus; IMPX.xml={docs, tags, tag:''};
+  impEscolherTag(impTagPadrao());
+}
+function impTagPadrao(){
+  const x=IMPX.xml; if(!x||!x.tags.length) return '';
+  const a=IMP_ALVOS[IMPX.alvo]; const pref=a&&a.xml?x.tags.find(t=>a.xml.test(t.tag)):null;
+  if(IMPX.esus && IMPX.alvo==='pacientes'){ const ci=x.tags.find(t=>t.tag==='cadastroIndividualTransport'); if(ci) return ci.tag; }
+  return (pref||x.tags[0]).tag;
+}
+function impEscolherTag(tag){
+  const x=IMPX.xml; if(!x) return; x.tag=tag; const cab=[], idx={}; const linhas=[];
+  const regs=[]; x.docs.forEach(d=>{ if(tag==='ROW' && impNomeLocal(d.documentElement)==='DATAPACKET') regs.push(...d.getElementsByTagName('ROW')); else d.querySelectorAll('*').forEach(el=>{ if(impNomeLocal(el)===tag) regs.push(el); }); });
+  regs.forEach(el=>{
+    /* mesmo nome vindo do mesmo tipo de elemento (ex.: várias lotações) = valores juntos com ";";
+       mesmo nome vindo de elementos diferentes = colunas separadas ("elemento.campo") */
+    const o={}, de={};
+    const put=(k, v, origem)=>{ v=String(v===undefined||v===null?'':v).trim(); if(v==='') return;
+      if(o[k]===undefined){ o[k]=v; de[k]=origem; return; }
+      if(de[k]===origem){ if(!o[k].split(';').includes(v)) o[k]+=';'+v; return; }
+      const k2=origem+'.'+k; if(o[k2]===undefined){ o[k2]=v; de[k2]=origem; } else if(!o[k2].split(';').includes(v)) o[k2]+=';'+v; };
+    [...el.attributes].forEach(a=>{ if(!/^xmlns/.test(a.name)) put(a.name.replace(/^.*:/,''), a.value, tag); });
+    el.querySelectorAll('*').forEach(c=>{ const n=impNomeLocal(c);
+      if(!c.children.length) put(n, c.textContent, impNomeLocal(c.parentElement));
+      [...c.attributes].forEach(a=>{ if(!/^xmlns/.test(a.name)) put(a.name.replace(/^.*:/,''), a.value, n); }); });
+    /* dados de quem "contém" o registro (ex.: o CNES da unidade para cada profissional) */
+    let p=el.parentElement; while(p){ [...p.attributes].forEach(a=>{ const k=a.name.replace(/^.*:/,''); if(!/^xmlns/.test(a.name) && o[k]===undefined) o[k]=a.value; }); [...p.children].forEach(c=>{ if(c!==el && !c.children.length){ const n=impNomeLocal(c); if(o[n]===undefined && c.textContent.trim()) o[n]=c.textContent.trim(); } }); p=p.parentElement; }
+    linhas.push(o);
+  });
+  /* e-SUS: o endereço está no Cadastro Domiciliar da família — liga pelo CNS do responsável */
+  if(IMPX.esus){
+    const end=new Map();
+    x.docs.forEach(d=>d.querySelectorAll('*').forEach(el=>{ if(impNomeLocal(el)!=='cadastroDomiciliarTransport') return;
+      const g=n=>{ const e=[...el.querySelectorAll('*')].find(c=>impNomeLocal(c)===n && !c.children.length); return e?e.textContent.trim():''; };
+      const tipo=({'081':'RUA','008':'AVENIDA'})[g('tipoLogradouroNumeroDne')]||'';
+      const info={ESUS_LOGRADOURO:(tipo?tipo+' ':'')+g('nomeLogradouro'), ESUS_NUMERO:g('numero'), ESUS_COMPLEMENTO:g('complemento'), ESUS_BAIRRO:g('bairro'), ESUS_CEP:g('cep'), ESUS_TELEFONE:g('telefoneResidencia')||g('telefoneContato')};
+      [...el.querySelectorAll('*')].filter(c=>impNomeLocal(c)==='numeroCnsResponsavel').forEach(c=>{ const k=soDigitos(c.textContent); if(k) end.set(k, info); }); }));
+    if(end.size) linhas.forEach(o=>{ const resp=soDigitos(o.cnsResponsavelFamiliar) || (String(o.statusEhResponsavel).toLowerCase()==='true'?soDigitos(o.cnsCidadao):''); const e=end.get(resp)||end.get(soDigitos(o.cnsCidadao)); if(e) Object.keys(e).forEach(k=>{ if(e[k]) o[k]=e[k]; }); });
+  }
+  linhas.forEach(o=>Object.keys(o).forEach(k=>{ if(idx[k]===undefined){ idx[k]=cab.length; cab.push(k); } }));
+  IMPX.tabela={cab, linhas:linhas.map(o=>cab.map(k=>o[k]===undefined?'':o[k]))};
+  IMPX.an=null; impAutoMapa();
+}
+/* Colunas: reconhece pelo nome (sinônimos) e lembra o que o usuário escolheu da última vez */
+function impMapasSalvos(){ try{ return JSON.parse(localStorage.getItem('pis_imp_mapas')||'{}'); }catch(e){ return {}; } }
+function impAutoMapa(){
+  const a=IMP_ALVOS[IMPX.alvo]; if(!a||!IMPX.tabela) return;
+  const cab=impCabecalho().map(impCompacto); const usados=new Set(); const mapa={};
+  /* 1º: nomes idênticos em todos os campos; 2º: só então os parecidos (termina com o sinônimo) */
+  a.campos.forEach(c=>{ const s=c.sin.map(impCompacto); for(const x of s){ const i=cab.findIndex((h,j)=>!usados.has(j) && h===x); if(i>=0){ mapa[c.k]=i; usados.add(i); return; } } });
+  a.campos.forEach(c=>{ if(mapa[c.k]!==undefined) return; const s=c.sin.map(impCompacto); const i=cab.findIndex((h,j)=>!usados.has(j) && s.some(x=>x.length>=5 && h.endsWith(x))); if(i>=0){ mapa[c.k]=i; usados.add(i); } });
+  const salvo=(impMapasSalvos()[IMPX.alvo])||{};
+  Object.keys(salvo).forEach(k=>{ if(salvo[k]===null){ delete mapa[k]; return; } const i=cab.indexOf(salvo[k]); if(i>=0) mapa[k]=i; });
+  IMPX.mapa=mapa; IMPX.an=null;
+}
+function impMapear(k, v){
+  const i=v===''?undefined:Number(v); const cab=impCabecalho().map(impCompacto);
+  IMPX.mapa[k]=i; IMPX.an=null;
+  try{ const s=impMapasSalvos(); s[IMPX.alvo]=s[IMPX.alvo]||{}; s[IMPX.alvo][k]=i===undefined?null:cab[i]; localStorage.setItem('pis_imp_mapas', JSON.stringify(s)); }catch(e){}
+  render(true);
+}
+function impEsquecerMapa(){ try{ const s=impMapasSalvos(); delete s[IMPX.alvo]; localStorage.setItem('pis_imp_mapas', JSON.stringify(s)); }catch(e){} impAutoMapa(); render(true); }
+function impCabecalho(){ const t=IMPX.tabela; if(!t) return []; return IMPX.semTitulo ? t.cab.map((_,i)=>'Coluna '+(i+1)) : t.cab; }
+function impLinhas(){ const t=IMPX.tabela; if(!t) return []; return IMPX.semTitulo ? [t.cab].concat(t.linhas) : t.linhas; }
+
+/* ---------------- Análise: novo, já existe, repetido ou com problema ---------------- */
+function impAnalisar(){
+  const a=IMP_ALVOS[IMPX.alvo]; if(!a||!IMPX.tabela) return null;
+  const chave=JSON.stringify([IMPX.alvo, IMPX.mapa, IMPX.semTitulo, IMPX.tabela.linhas.length, IMPX.xml&&IMPX.xml.tag, lista(a.tab).length, IMPX.esus]);
+  if(IMPX.an && IMPX.anChave===chave) return IMPX.an;
+  const cab=impCabecalho(); const ctx={idx:{}, aux:{}, esus:IMPX.esus, nomeArquivo:IMPX.arquivos.join(', ')};
+  const existentes=new Map(); lista(a.tab).forEach(r=>{ const rr=Object.assign({}, r); a.chaves(rr).filter(Boolean).forEach(k=>{ if(!existentes.has(k)) existentes.set(k, r); }); });
+  const vistos=new Set();
+  const itens=impLinhas().map((l, n)=>{
+    const o={}; cab.forEach((h,i)=>{ o[h]=l[i]; });
+    const r={}; a.campos.forEach(c=>{ const i=IMPX.mapa[c.k]; if(i===undefined) return; const v=impConv(c.t, l[i], ctx); if(!impVazio(v)) r[c.k]=v; });
+    if(a.montar) a.montar(r, o, ctx);
+    const erro=a.validar?a.validar(r):''; const avisos=(r._avisos||[]).concat(a.avisos?a.avisos(r):[]); delete r._avisos;
+    let st='novo', ex=null;
+    if(erro) st='invalido';
+    else { const ks=a.chaves(r).filter(Boolean); ex=ks.map(k=>existentes.get(k)).find(Boolean)||null; if(ex) st='existe'; else if(ks.some(k=>vistos.has(k))) st='repetido'; ks.forEach(k=>vistos.add(k)); }
+    return {n:n+1, r, st, ex, erro, avisos:st==='novo'?avisos:[], completa:st==='existe' && !!impCompletar(ex, r)};
+  });
+  const aux={}; Object.keys(ctx.aux).forEach(t=>{ const novos=[...ctx.aux[t].values()].filter(x=>!obter(t,x.id)); if(novos.length) aux[t]=novos; });
+  IMPX.an={itens, cont:contar(itens, x=>x.st), aux}; IMPX.anChave=chave;
+  return IMPX.an;
+}
+function impCompletar(ex, r){
+  const c=Object.assign({}, ex); let mud=false;
+  Object.keys(r).forEach(k=>{ if(['id','matriculaArq','situacao','origem','ativo','agenda','tempoConsulta','usaTriagem','rename','parametros','tipoResultado','importacao'].includes(k)) return; if(impVazio(c[k]) && !impVazio(r[k])){ c[k]=r[k]; mud=true; } });
+  return mud?c:null;
+}
+
+/* ---------------- Gravação ---------------- */
+async function impExecutar(){
+  const a=IMP_ALVOS[IMPX.alvo]; if(!a) return;
+  if(!isAdmin() && !pode(a.view)){ showToast('Seu perfil não pode incluir registros em '+a.titulo+'.','warning'); return; }
+  const an=impAnalisar(); const novos=an.itens.filter(x=>x.st==='novo').map(x=>x.r);
+  const comp=IMPX.completar ? an.itens.filter(x=>x.st==='existe').map(x=>impCompletar(x.ex, x.r)).filter(Boolean) : [];
+  const auxN=Object.values(an.aux).reduce((s,l)=>s+l.length,0);
+  if(!novos.length && !comp.length && !auxN){ showToast('Nada novo para importar.','warning'); return; }
+  if(!confirm(`Importar ${fmtNum(novos.length)} ${a.titulo.toLowerCase()} novo(s)${comp.length?' e completar '+fmtNum(comp.length)+' cadastro(s) que já existiam (só campos em branco)':''}${auxN?' — e criar '+fmtNum(auxN)+' cadastro(s) de apoio ('+Object.keys(an.aux).map(t=>an.aux[t].length+' '+impNomeTab(t)).join(', ')+')':''}?`)) return;
+  const impId=uid(); const quando=agoraLocal(); const arquivos=IMPX.arquivos.join(', ');
+  const prog=document.getElementById('impProg'); const bar=t=>{ if(prog) prog.innerHTML=`<div class="progress"><div style="width:${t[0]}%"></div></div><div class="small muted">${esc(t[1])}</div>`; };
+  try{
+    for(const t of Object.keys(an.aux)){ bar([5,'Criando '+impNomeTab(t)+'…']); await salvarLote(t, an.aux[t].map(r=>Object.assign({}, r, {importacao:impId}))); }
+    novos.forEach(r=>{ r.importacao=impId; });
+    if(a.preparar){ bar([10,'Preparando…']); await a.preparar(novos, {usarMatricula:IMPX.usarMatricula}); }
+    await salvarLote(a.tab, novos.concat(comp), (f,t)=>bar([10+Math.round(f/t*88), fmtNum(f)+' de '+fmtNum(t)+' gravado(s)…']));
+    const cont=an.cont;
+    salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo:IMPX.alvo, fonte:IMPX.fonte, arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, existentes:cont.existe||0, repetidos:cont.repetido||0, invalidos:cont.invalido||0, aux:Object.fromEntries(Object.keys(an.aux).map(t=>[t, an.aux[t].length]))});
+    registrarAcao(`Importou ${novos.length} ${a.titulo.toLowerCase()} (e completou ${comp.length}) de ${arquivos}`);
+    const sobras=an.itens.filter(x=>x.st!=='novo');
+    IMPX.resultado={alvo:IMPX.alvo, novos:novos.length, comp:comp.length, aux:auxN, sobras:sobras.map(x=>[x.n, ({existe:'já cadastrado',repetido:'repetido no arquivo',invalido:'com problema'})[x.st], x.erro||(x.st==='existe'?(nomeDe(a.tab,x.ex.id)||''):''), (a.prev||[]).map(p=>impFmtPrev(a, p[0], x.r)).join(' | ')]), arquivos};
+    IMPX.an=null; IMPX.filtro=''; render(true);  /* o arquivo continua carregado: dá para importar outro tipo dele (ex.: profissionais do mesmo XML do CNES) */
+  }catch(e){ console.error(e); if(prog) prog.innerHTML=`<div class="alerta-erro">Falha ao gravar: ${esc(msgErro(e))}. O que já foi gravado fica no histórico de importações abaixo.</div>`;
+    try{ salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo:IMPX.alvo, fonte:IMPX.fonte, arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, falhou:msgErro(e)}); }catch(e2){} }
+}
+function impNomeTab(t){ return ({especialidades:'especialidade(s)', unidades:'unidade(s)', labGrupos:'grupo(s) de exame', labMateriais:'material(is)'})[t]||t; }
+function impRelatorio(){ const R=IMPX.resultado; if(!R) return; exportarExcel('Importação — linhas não incluídas', {nome:'Não incluídas', titulo:'Linhas não incluídas na importação de '+R.arquivos, cab:['Linha do arquivo','Situação','Detalhe','Dados'], linhas:R.sobras}); }
+
+/* ---------------- Desfazer ---------------- */
+function impExcluirLote(tab, ids){
+  const porDoc=new Map(); ids.forEach(id=>{ const d=ONDE[tab].get(id); if(!d) return; if(!porDoc.has(d)) porDoc.set(d, []); porDoc.get(d).push(id); });
+  const ps=[];
+  porDoc.forEach((lst, d)=>{ for(let i=0;i<lst.length;i+=300){ const campos={}; lst.slice(i,i+300).forEach(id=>{ campos['r.'+id]=DELETE; DB[tab].delete(id); ONDE[tab].delete(id); if(DOCS[d]) DOCS[d].delete(id); }); ps.push(acompanharGravacao(DRIVER.update(d, campos))); } });
+  mudou(tab); return Promise.all(ps);
+}
+async function impDesfazer(id){
+  if(!isAdmin()){ showToast('Só o administrador desfaz importações.','warning'); return; }
+  const h=obter('importacoes', id); if(!h) return;
+  if(!confirm('Desfazer a importação de '+fmtDataHora(h.data)+' ('+(IMP_ALVOS[h.alvo]||{titulo:h.alvo}).titulo+')?\n\nSó são apagados os cadastros que ESTA importação criou e que ninguém usou nem alterou depois. Os cadastros que já existiam e foram completados continuam como estão.')) return;
+  carregandoMsg(true, 'Conferindo se os cadastros importados já foram usados…');
+  try{
+    const mensais=Object.keys(TABELAS).filter(t=>TABELAS[t].modo==='mes' && tabelaPermitida(t));
+    await garantirPeriodo(mensais, String(h.data).slice(0,10), hojeISO());
+    const cand=new Map(); Object.keys(TABELAS).forEach(t=>lista(t).forEach(r=>{ if(r.importacao===id) cand.set(r.id, {t, r}); }));
+    const manter=new Set(); cand.forEach((x,k)=>{ if(x.r.alteradoEm && x.r.criadoEm && x.r.alteradoEm!==x.r.criadoEm) manter.add(k); });
+    const refsDe=(obj, acc)=>{ if(obj===null||obj===undefined) return; if(typeof obj==='string'){ if(cand.has(obj)) acc.add(obj); return; } if(Array.isArray(obj)){ obj.forEach(v=>refsDe(v, acc)); return; } if(typeof obj==='object') Object.keys(obj).forEach(k=>{ if(k!=='id') refsDe(obj[k], acc); }); };
+    const usados=new Set();
+    Object.keys(TABELAS).forEach(t=>lista(t).forEach(r=>{ if(!cand.has(r.id)) refsDe(r, usados); }));
+    (USERS_STATE.usuarios||[]).forEach(u=>refsDe(u, usados));
+    usados.forEach(k=>manter.add(k));
+    let mudou_=true; while(mudou_){ mudou_=false; manter.forEach(k=>{ const acc=new Set(); refsDe(cand.get(k).r, acc); acc.forEach(x=>{ if(!manter.has(x)){ manter.add(x); mudou_=true; } }); }); }
+    const porTab={}; cand.forEach((x,k)=>{ if(manter.has(k)) return; (porTab[x.t]=porTab[x.t]||[]).push(k); });
+    const total=Object.values(porTab).reduce((s,l)=>s+l.length,0);
+    carregandoMsg(false);
+    if(!total){ showToast('Nada a desfazer: todos os cadastros desta importação já foram usados ou alterados.','warning'); salvar('importacoes', Object.assign({}, h, {desfeita:true, removidos:0, mantidos:manter.size, desfeitaEm:agoraLocal(), desfeitaPor:usuarioCurto()})); return; }
+    if(!confirm(`Serão apagados ${fmtNum(total)} cadastro(s) criados por esta importação${manter.size?' — '+fmtNum(manter.size)+' ficam, porque já foram usados ou alterados':''}. Confirmar?`)) return;
+    for(const t of Object.keys(porTab)) await impExcluirLote(t, porTab[t]);
+    salvar('importacoes', Object.assign({}, h, {desfeita:true, removidos:total, mantidos:manter.size, desfeitaEm:agoraLocal(), desfeitaPor:usuarioCurto()}));
+    registrarAcao('Desfez a importação de '+fmtDataHora(h.data)+': apagou '+total+' cadastro(s) criados por ela');
+    showToast(fmtNum(total)+' cadastro(s) removido(s).','success');
+  }catch(e){ console.error(e); showToast('Não foi possível desfazer: '+msgErro(e),'error'); }
+  finally{ carregandoMsg(false); render(true); }
+}
+
+/* ---------------- Tela ---------------- */
+function impFmtPrev(a, k, r){
+  const v=r[k]; if(impVazio(v)) return '';
+  if(k==='nascimento') return fmtData(v); if(k==='cns') return fmtCNS(v); if(k==='cpf') return fmtCPF(v);
+  if(k==='especialidadeId'){ const e=obter('especialidades',v)||[...((IMPX.an&&IMPX.an.aux.especialidades)||[])].find(x=>x.id===v); return e?(e.cbo+' '+e.nome):''; }
+  if(k==='unidades') return v.map(id=>{ const u=obter('unidades',id)||((IMPX.an&&IMPX.an.aux.unidades)||[]).find(x=>x.id===id); return u?u.nome:''; }).join(', ');
+  return String(v);
+}
+function impEscolherAlvo(k){ IMPX.alvo=k; IMPX.resultado=null; if(IMPX.xml) impEscolherTag(impTagPadrao()); else impAutoMapa(); IMPX.an=null; render(true); }
+VIEWS.importacao=()=>impTelaHTML(null);
+VIEWS.importarPacientes=()=>impTelaHTML('pacientes');
+function impTelaHTML(fixo){
+  if(fixo && IMPX.alvo!==fixo){ IMPX.alvo=fixo; IMPX.an=null; if(IMPX.tabela) impAutoMapa(); }
+  const a=IMP_ALVOS[IMPX.alvo]; const fonte=IMP_FONTES.find(f=>f.id===IMPX.fonte)||IMP_FONTES[0];
+  const alvos=Object.entries(IMP_ALVOS).filter(([k,x])=>!x.disponivel||x.disponivel()).sort((x,y)=>x[1].ordem-y[1].ordem);
+  let h=`<div class="helpbox">Traga os cadastros que o município já tem em outro sistema, sem digitar de novo. <b>Nada do que já está cadastrado é apagado ou trocado:</b> quem já existe é reconhecido (CPF, CNS, CNES, CBO, código...) e, se você quiser, só ganha os dados que estavam em branco. Ordem recomendada: <b>unidades → profissionais → pacientes</b>.</div>`;
+  if(!fixo) h+=`<div class="card"><h2>1. O que você quer importar?</h2><div class="grid cols-4">${alvos.map(([k,x])=>`<div class="stat clic ${IMPX.alvo===k?'ok':''}" style="${IMPX.alvo===k?'outline:2px solid var(--teal);':''}" onclick="impEscolherAlvo('${k}')"><div class="label">${x.ic} ${esc(x.titulo)}</div><div class="value" style="font-size:18px;">${fmtNum(lista(x.tab).length)}</div><div class="hint">já cadastrado(s)</div></div>`).join('')}
+    <div class="stat clic" onclick="cadImportarAbrir('procedimentos')"><div class="label">📑 Procedimentos SIGTAP</div><div class="hint" style="margin-top:8px;">arquivo oficial do DATASUS (tb_procedimento.txt)</div></div>
+    <div class="stat clic" onclick="cadImportarAbrir('cid')"><div class="label">🩻 CID-10</div><div class="hint" style="margin-top:8px;">arquivo oficial do DATASUS (CSV)</div></div></div></div>`;
+  if(!a) return h+impHistoricoHTML(fixo);
+  h+=`<div class="card"><h2>${fixo?'1':'2'}. De onde vêm os dados de ${esc(a.titulo.toLowerCase())}?</h2><div class="actions mb">${IMP_FONTES.map(f=>`<span class="chip clic ${IMPX.fonte===f.id?'sel':''}" onclick="IMPX.fonte='${f.id}';render(true)">${f.ic} ${esc(f.nome)}</span>`).join('')}</div>
+    <div class="helpbox">${fonte.como}</div><div class="small muted mb">${esc(a.dica||'')}</div>
+    ${IMPX.fonte==='colar'?`<textarea id="impColado" class="inp" rows="6" placeholder="Cole aqui (Ctrl+V) as linhas copiadas, com a linha de títulos"></textarea><div class="actions mt"><button class="btn" onclick="impColar()">Usar os dados colados</button></div>`
+      :`<input type="file" class="inp" multiple accept=".xlsx,.xls,.ods,.csv,.txt,.xml,.zip" onchange="impArquivos(event)" style="max-width:460px;"> <span class="small muted">pode escolher vários arquivos (.xml, .zip, .xlsx, .csv, .txt)</span>`}
+    ${IMPX.lendo?'<div class="mt"><span class="spinner"></span> Lendo os arquivos…</div>':''}</div>`;
+  if(IMPX.resultado && IMPX.resultado.alvo===IMPX.alvo){ const R=IMPX.resultado; h+=`<div class="card"><div class="alerta-ok">✅ Importação concluída: <b>${fmtNum(R.novos)}</b> incluído(s)${R.comp?', <b>'+fmtNum(R.comp)+'</b> completado(s)':''}${R.aux?', '+fmtNum(R.aux)+' cadastro(s) de apoio criado(s)':''}.${fixo?'':' O arquivo continua carregado — se ele tiver outros cadastros (ex.: o XML do CNES traz unidades e profissionais), escolha o tipo acima e importe também.'}</div><div class="actions">${R.sobras.length?`<button class="btn secondary" onclick="impRelatorio()">⭳ Relatório das ${fmtNum(R.sobras.length)} linha(s) não incluídas (Excel)</button>`:''}${podeVer(a.view)?`<button class="btn" onclick="goto('${a.view==='importarPacientes'?'pacientes':a.view}')">Ver ${esc(a.titulo.toLowerCase())} →</button>`:''}</div></div>`; }
+  if(IMPX.tabela) h+=impMapaHTML(a, fixo);
+  return h+impHistoricoHTML(fixo);
+}
+function impMapaHTML(a, fixo){
+  const cab=impCabecalho(); const an=impAnalisar(); const c=an.cont; const n0=fixo?2:3;
+  const sel=k=>`<select class="inp" onchange="impMapear('${k}',this.value)"><option value="">— não importar —</option>${cab.map((hh,i)=>`<option value="${i}" ${IMPX.mapa[k]===i?'selected':''}>${esc(hh||('coluna '+(i+1)))}</option>`).join('')}</select>`;
+  const ex1=impLinhas()[0]||[]; const exemplo=k=>{ const i=IMPX.mapa[k]; return i===undefined?'':String(ex1[i]===undefined?'':ex1[i]).slice(0,40); };
+  const auxTxt=Object.keys(an.aux).map(t=>`<b>${fmtNum(an.aux[t].length)}</b> ${impNomeTab(t)} (${an.aux[t].slice(0,4).map(x=>esc(x.nome||x.cbo||'')).join(', ')}${an.aux[t].length>4?'…':''})`).join(' · ');
+  const fil=IMPX.filtro; const lst=an.itens.filter(x=>!fil || x.st===fil || (fil==='aviso' && x.avisos.length));
+  const stB={novo:'<span class="badge ok">novo</span>', existe:'<span class="badge azul">já existe</span>', repetido:'<span class="badge ambar">repetido</span>', invalido:'<span class="badge ruim">problema</span>'};
+  const comAviso=an.itens.filter(x=>x.st==='novo' && x.avisos.length).length;
+  return `<div class="card"><h2>${n0}. Confira as colunas — ${esc(IMPX.arquivos.join(', ').slice(0,120))} (${fmtNum(impLinhas().length)} registro(s))</h2>
+    ${IMPX.xml?`<div class="actions mb"><span class="small">Registro do XML:</span><select class="inp" style="width:auto;" onchange="impEscolherTag(this.value);render(true)">${IMPX.xml.tags.slice(0,30).map(t=>`<option value="${esc(t.tag)}" ${t.tag===IMPX.xml.tag?'selected':''}>${esc(t.tag)} (${fmtNum(t.n)})</option>`).join('')}</select>${IMPX.esus?'<span class="badge ok">formato e-SUS reconhecido</span>':''}</div>`:''}
+    <div class="formgrid c6">${a.campos.map(cc=>`<div class="field"><label>${esc(cc.r)}${cc.obr?' <span class="obr">*</span>':''}</label>${sel(cc.k)}${exemplo(cc.k)?`<div class="dica">ex.: ${esc(exemplo(cc.k))}</div>`:''}</div>`).join('')}</div>
+    <div class="actions mt">${IMPX.xml?'':`<label class="check small"><input type="checkbox" ${IMPX.semTitulo?'checked':''} onchange="IMPX.semTitulo=this.checked;impAutoMapa();render(true)"> o arquivo não tem linha de títulos</label>`}
+      <label class="check small"><input type="checkbox" ${IMPX.completar?'checked':''} onchange="IMPX.completar=this.checked;render(true)"> completar os campos em branco de quem já está cadastrado (nunca troca o que já está preenchido)</label>
+      ${IMPX.alvo==='pacientes'?`<label class="check small"><input type="checkbox" ${IMPX.usarMatricula?'checked':''} onchange="IMPX.usarMatricula=this.checked"> manter a matrícula do outro sistema quando estiver livre</label>`:''}
+      <button class="btn ghost small" onclick="impEsquecerMapa()" title="As colunas que você escolhe são lembradas neste computador para a próxima vez">↺ reconhecer as colunas de novo</button></div></div>
+  <div class="card"><h2>${n0+1}. Prévia e importação</h2>
+    <div class="actions mb">${[['','todos',an.itens.length,'cinza'],['novo','novos',c.novo||0,'ok'],['existe','já cadastrados',c.existe||0,'azul'],['repetido','repetidos no arquivo',c.repetido||0,'ambar'],['invalido','com problema',c.invalido||0,'ruim'],['aviso','novos com aviso',comAviso,'ambar']].map(([f,r,nn,cl])=>`<span class="chip clic ${fil===f?'sel':''}" onclick="IMPX.filtro='${f}';render(true)"><span class="badge ${cl}">${fmtNum(nn)}</span> ${r}</span>`).join('')}</div>
+    ${auxTxt?`<div class="helpbox">Também serão criados: ${auxTxt}.</div>`:''}
+    <div class="table-wrap" style="max-height:380px;"><table><thead><tr><th>Linha</th><th>Situação</th>${(a.prev||[]).map(p=>`<th>${esc(p[1])}</th>`).join('')}<th>Observação</th></tr></thead><tbody>
+    ${lst.slice(0,150).map(x=>`<tr><td class="num">${x.n}</td><td>${stB[x.st]}</td>${(a.prev||[]).map(p=>`<td>${esc(impFmtPrev(a,p[0],x.r))}</td>`).join('')}<td class="small">${esc(x.erro||(x.st==='existe'?'já cadastrado: '+(nomeDe(a.tab,x.ex.id)||'')+(x.completa&&IMPX.completar?' (ganha dados em branco)':''):''))}${x.avisos.length?`<span class="muted">${esc(x.avisos.join(' · '))}</span>`:''}</td></tr>`).join('')||'<tr class="empty-row"><td colspan="9">Nada neste filtro.</td></tr>'}</tbody></table></div>
+    ${lst.length>150?`<div class="small muted mt">Mostrando 150 de ${fmtNum(lst.length)}.</div>`:''}
+    <div class="actions mt">${(()=>{ const nc=IMPX.completar?an.itens.filter(x=>x.completa).length:0; const nAux=Object.values(an.aux).reduce((s,l)=>s+l.length,0); const nada=!(c.novo||0) && !nc && !nAux;
+      return `<button class="btn big" onclick="impExecutar()" ${nada?'disabled':''}>${nada?'Nada novo para importar neste arquivo':`📥 Importar ${fmtNum(c.novo||0)} novo(s)${nc?' e completar '+fmtNum(nc)+' já cadastrado(s)':''}`}</button>`; })()}<button class="btn ghost" onclick="impResetDados();render(true)">${IMPX.resultado?'Fechar o arquivo':'Cancelar'}</button></div><div id="impProg" class="mt"></div></div>`;
+}
+function impHistoricoHTML(fixo){
+  let l=ordenarPor(lista('importacoes'), x=>x.data).reverse(); if(fixo) l=l.filter(x=>x.alvo===fixo);
+  if(!l.length) return '';
+  return `<div class="card"><h2>📜 Importações feitas</h2><div class="subtitle">"Desfazer" apaga só o que a importação criou e que ninguém usou nem alterou depois.</div>${tabelaHTML(['Quando','Por','O quê','Origem','Arquivo(s)','Incluídos','Completados','Situação',''], l.slice(0,40).map(x=>[esc(fmtDataHora(x.data)), esc(x.por||''), esc((IMP_ALVOS[x.alvo]||{titulo:x.alvo}).titulo), esc((IMP_FONTES.find(f=>f.id===x.fonte)||{nome:x.fonte||''}).nome), `<span class="small">${esc(String(x.arquivos||'').slice(0,60))}</span>`, fmtNum(x.novos||0), fmtNum(x.completados||0),
+    x.falhou?`<span class="badge ruim">falhou</span>`:x.desfeita?`<span class="badge cinza">desfeita (${fmtNum(x.removidos||0)} removidos${x.mantidos?', '+fmtNum(x.mantidos)+' mantidos':''})</span>`:'<span class="badge ok">ok</span>',
+    !x.desfeita && x.novos && isAdmin() ? `<button class="btn ghost small" onclick="impDesfazer('${x.id}')">↶ desfazer</button>` : '']), {html:true})}</div>`;
+}
+/* Botão "Importar" das telas de cadastro: leva para a central já no tipo certo */
+function importarAbrir(cadId){
+  const alvo=Object.keys(IMP_ALVOS).find(k=>IMP_ALVOS[k].tab===CADS[cadId].tab);
+  if(alvo && isAdmin()){ IMPX.alvo=alvo; IMPX.resultado=null; impResetDados(); goto('importacao'); return; }
+  cadImportarAbrir(cadId);
+}
 
 </script>
 </body>
