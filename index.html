@@ -586,10 +586,14 @@ const DOC_CONTADORES = 'contadores';
                              (laudo AIH, familiares, caução), troca de leito, alta, encerramento, prescrição
                              → farmácia e enfermagem (checagem), evoluções, dietas, visitas, documentos e
                              relatórios; RECEITAS A DISPENSAR: a receita do consultório vai sozinha à farmácia
+     1.07.2026  14/10/2026   MÓDULO FATURAMENTO (equivalente ao SIS_FATU): BPA-MAG (arquivo texto oficial),
+                             AIH e arquivo do SISAIH01, contas de convênio e guias TISS, CIH, consórcio,
+                             relatórios e atualização da Tabela Unificada (SIGTAP); a Produção (BPA) do
+                             Ambulatório passou para este módulo
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 6;
+const APP_ALTERACAO = 7;
 const APP_DATA = '2026-10-14';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -842,6 +846,15 @@ const TABELAS = {
   hospRegistros:{modo:'mes',campo:'data',partes:16,clinico:true}, /* prescrição do dia, checagens, evoluções, anotações */
   hospVisitas:{modo:'mes',campo:'data',partes:2},
   hospLeitosHist:{modo:'mes',campo:'data',partes:1},
+  /* ---- MÓDULO FATURAMENTO (1.07) ---- */
+  fatCompetencias:{}, fatPlanos:{}, fatTabelas:{}, fatCoeficientes:{}, fatGrupos:{}, fatPortes:{}, fatPrestadores:{}, fatConsMunicipios:{},
+  fatFechamentos:{}, fatBpaImportados:{},                    /* BPA-MAG gerados (o arquivo fica guardado à parte) e arquivos de outras unidades */
+  fatAihs:{modo:'hash',partes:8,clinico:true},              /* AIH de cada internação SUS */
+  fatContas:{modo:'hash',partes:8,clinico:true},            /* contas de convênio e particulares */
+  fatCih:{modo:'hash',partes:2,clinico:true}, fatRecibos:{modo:'hash',partes:2},
+  /* sob demanda: só carregam quando uma tela do faturamento precisa (garantirTabela) */
+  fatProcConv:{modo:'hash',partes:4,sobDemanda:true}, fatEquiv:{modo:'hash',partes:2,sobDemanda:true},
+  fatCompatCbo:{modo:'hash',partes:16,sobDemanda:true}, fatCbos:{modo:'hash',partes:2,sobDemanda:true},
 };
 /* Capacidade: cada parte guarda até ~900 KB. Com as partes acima o sistema comporta, por exemplo,
    ~40 mil pacientes, ~100 mil doses de vacina e ~3 mil atendimentos por mês. Para um município
@@ -968,6 +981,10 @@ async function carregarTabela(tab, meses){
   await Promise.all(docsDaTabela(tab, meses).map(id=>ouvirDoc(id, tab)));
   if(meses) meses.forEach(m=>MESES_OK[tab].add(m));
 }
+/* tabelas "sob demanda" (TABELAS[t].sobDemanda): não carregam no login, só quando alguém precisa */
+const SOB_DEMANDA_OK=new Set(); let SOB_DEMANDA_CARREGANDO=null;
+async function garantirTabela(tabs){ for(const t of [].concat(tabs||[])){ if(!TABELAS[t] || !tabelaPermitida(t) || SOB_DEMANDA_OK.has(t)) continue; if(!TABELAS[t].sobDemanda){ SOB_DEMANDA_OK.add(t); continue; } await carregarTabela(t, null); SOB_DEMANDA_OK.add(t); } }
+function exigirTabelas(tabs){ const falta=[].concat(tabs).filter(t=>TABELAS[t] && TABELAS[t].sobDemanda && tabelaPermitida(t) && !SOB_DEMANDA_OK.has(t)); if(!falta.length) return true; if(!SOB_DEMANDA_CARREGANDO) SOB_DEMANDA_CARREGANDO=garantirTabela(falta).catch(e=>showToast('Não foi possível carregar: '+msgErro(e),'error')).finally(()=>{ SOB_DEMANDA_CARREGANDO=null; render(true); }); return false; }
 async function garantirMeses(tab, meses){
   if(!tabelaPermitida(tab) || TABELAS[tab].modo!=='mes') return;
   const falta=(meses||[]).filter(m=>!MESES_OK[tab].has(m));
@@ -1633,7 +1650,7 @@ async function iniciarSessao(u){
   registrarAcao('Entrou no sistema');
   await carregarTudo();
   await garantirDadosPadrao();
-  if(MODO_DEMO){ try{ await seedDemo(); if(typeof seedDemoLab==='function') await seedDemoLab(); if(typeof seedDemoFarma==='function') await seedDemoFarma(); if(typeof seedDemoHosp==='function') await seedDemoHosp(); }catch(e){ console.error('demo', e); } }
+  if(MODO_DEMO){ try{ await seedDemo(); if(typeof seedDemoLab==='function') await seedDemoLab(); if(typeof seedDemoFarma==='function') await seedDemoFarma(); if(typeof seedDemoHosp==='function') await seedDemoHosp(); if(typeof seedDemoFat==='function') await seedDemoFat(); }catch(e){ console.error('demo', e); } }
   if(!MODO_DEMO && isAdmin() && cfgEnt().nome) CloudDriver.set('_publico', {instalado:true, em:agoraLocal(), entidade:entidadeFantasia()}).catch(()=>{});
   APP_PRONTO=true;
   mostrarTela(null);
@@ -1652,7 +1669,7 @@ async function iniciarSessao(u){
 function primeiraTelaPermitida(){ for(const g of MENU) for(const it of g.itens) if(podeVer(it.id)) return it.id; return 'painel'; }
 async function carregarTudo(){
   mostrarTela('loadingScreen');
-  const tabs=Object.keys(TABELAS).filter(t=>tabelaPermitida(t));
+  const tabs=Object.keys(TABELAS).filter(t=>tabelaPermitida(t) && !TABELAS[t].sobDemanda);
   const tarefas=[];
   tabs.forEach(t=>{
     const d=TABELAS[t];
@@ -1750,6 +1767,7 @@ function navBadge(id){
     if(typeof labBadge==='function' && /^lab/.test(id)) return labBadge(id);
     if(typeof farmaBadge==='function' && /^farma/.test(id)) return farmaBadge(id);
     if(typeof hospBadge==='function' && /^hosp/.test(id)) return hospBadge(id);
+    if(typeof fatBadge==='function' && /^fat/.test(id)) return fatBadge(id);
   }catch(e){}
   return 0;
 }
@@ -4369,7 +4387,7 @@ function rosca(id, labels, valores){ grafico(id, {type:'doughnut', data:{labels,
 /* ============================================================
    CENTRAL DE RELATÓRIOS
    ============================================================ */
-const RF={rel:'', ini:primeiroDiaMes(mesDe(hojeISO())), fim:hojeISO(), unidade:'', profissional:'', especialidade:'', tipo:'', agrupar:'', sit:'', vacina:'', pacienteId:'', min:1, faltas:false, labExame:'', naoColetados:false, alterados:false, farmaLocal:'', farmaProduto:'', farmaGrupo:'', farmaLista:'', dias:60, hospSetor:'', hospConvenio:'', hospClinica:'', hospMunicipio:'', hospBase:'entrada', hospAbertas:false, hospData:hojeISO(), hospMes:mesDe(hojeISO()), hospOrdem:'leito'};
+const RF={rel:'', ini:primeiroDiaMes(mesDe(hojeISO())), fim:hojeISO(), unidade:'', profissional:'', especialidade:'', tipo:'', agrupar:'', sit:'', vacina:'', pacienteId:'', min:1, faltas:false, labExame:'', naoColetados:false, alterados:false, farmaLocal:'', farmaProduto:'', farmaGrupo:'', farmaLista:'', dias:60, hospSetor:'', hospConvenio:'', hospClinica:'', hospMunicipio:'', hospBase:'entrada', hospAbertas:false, hospData:hojeISO(), hospMes:mesDe(hojeISO()), hospOrdem:'leito', fatComp:addMeses(mesDe(hojeISO()),-1), fatConvenio:'', fatCbo:''};
 let RES=null;
 function fAtend(F, incluirFaltas){
   return lista('atendimentos').filter(a=>a.data>=F.ini && a.data<=F.fim && (!F.unidade||a.unidadeId===F.unidade) && (!F.profissional||a.profissionalId===F.profissional) && (!F.especialidade||a.especialidadeId===F.especialidade) && (!F.tipo||a.tipoAtendimentoId===F.tipo) && (incluirFaltas || !['faltou','cancelado','evadiu'].includes(a.status)) && a.status!=='cancelado');
@@ -4456,6 +4474,9 @@ function relatoriosHTML(mod){
   if(f.includes('farmaGrupo')) campos.push(`<div class="field"><label>Grupo</label>${sel('farmaGrupo', ordenarTexto(ativos('farmaGrupos'),g=>g.nome).map(g=>[g.id,g.nome]), RF.farmaGrupo, 'Todos')}</div>`);
   if(f.includes('farmaLista')) campos.push(`<div class="field"><label>Lista (controlados)</label>${sel('farmaLista', ordenarTexto(ativos('farmaListas'),g=>g.nome).map(g=>[g.id,g.nome+' — '+(g.descricao||'')]), RF.farmaLista, 'Todas')}</div>`);
   if(f.includes('dias')) campos.push(`<div class="field"><label>Até quantos dias</label><input type="number" class="inp" value="${RF.dias}" min="1" onchange="RF.dias=this.value"></div>`);
+  if(f.includes('fatComp')) campos.push(`<div class="field"><label>Competência</label>${typeof fatCompSel==='function'?fatCompSel(RF.fatComp, "RF.fatComp=this.value"):''}</div>`);
+  if(f.includes('fatConvenio')) campos.push(`<div class="field w2"><label>Convênio</label>${sel('fatConvenio', opcoesRef('convenios','').map(c=>[c.id,c.nome]), RF.fatConvenio, 'Todos')}</div>`);
+  if(f.includes('fatCbo')) campos.push(`<div class="field"><label>CBO (6 dígitos)</label><input class="inp" value="${esc(RF.fatCbo||'')}" placeholder="Ex.: 225125" onchange="RF.fatCbo=this.value"></div>`);
   if(f.includes('hospBase')) campos.push(`<div class="field"><label>Considerar a data da</label>${sel('hospBase', [['entrada','Internação'],['alta','Alta']], RF.hospBase)}</div>`);
   if(f.includes('hospSetor')) campos.push(`<div class="field w2"><label>Setor</label>${sel('hospSetor', ordenarTexto(ativos('hospSetores'),s=>s.nome).map(s=>[s.id,s.nome]), RF.hospSetor, 'Todos')}</div>`);
   if(f.includes('hospConvenio')) campos.push(`<div class="field w2"><label>Convênio</label>${sel('hospConvenio', [['SUS','SUS'],['PARTICULAR','Particular']].concat(opcoesRef('convenios','').map(c=>[c.id,c.nome])), RF.hospConvenio, 'Todos')}</div>`);
@@ -4471,7 +4492,7 @@ function relatoriosHTML(mod){
   if(f.includes('sitPos')) campos.push(`<div class="field"><label>Situação</label>${sel('sit', RF_OPCOES.sitPos, RF.sit)}</div>`);
   if(f.includes('sitAg')) campos.push(`<div class="field"><label>Situação</label>${sel('sit', RF_OPCOES.sitAg, RF.sit)}</div>`);
   if(f.includes('rankTipo')) campos.push(`<div class="field w2"><label>Ranking de</label>${sel('agrupar', RF_OPCOES.rankTipo, RF.agrupar)}</div><div class="field"><label>Mínimo</label><input type="number" class="inp" value="${RF.min}" min="1" onchange="RF.min=this.value"></div>`);
-  if(r.agrupar) campos.push(`<div class="field w2"><label>Agrupar por</label>${sel('agrupar', r.agrupar.map(k=>[k, ((mod==='lab'&&typeof LAB_AGRUP!=='undefined'&&LAB_AGRUP[k])||(mod==='hosp'&&typeof HOSP_AGRUP!=='undefined'&&HOSP_AGRUP[k])||AGRUPS[k]||[({local:'Local de destino',status:'Status',tipo:'Tipo',prioridade:'Prioridade',condicao:'Condição de saúde',raca:'Raça/cor',acs:'Agente comunitário'})[k]||k])[0]]), RF.agrupar)}</div>`);
+  if(r.agrupar) campos.push(`<div class="field w2"><label>Agrupar por</label>${sel('agrupar', r.agrupar.map(k=>[k, ((mod==='lab'&&typeof LAB_AGRUP!=='undefined'&&LAB_AGRUP[k])||(mod==='hosp'&&typeof HOSP_AGRUP!=='undefined'&&HOSP_AGRUP[k])||(mod==='fat'&&typeof FAT_AGRUP!=='undefined'&&FAT_AGRUP[k])||AGRUPS[k]||[({local:'Local de destino',status:'Status',tipo:'Tipo',prioridade:'Prioridade',condicao:'Condição de saúde',raca:'Raça/cor',acs:'Agente comunitário'})[k]||k])[0]]), RF.agrupar)}</div>`);
   if(f.includes('faltas')) campos.push(`<div class="field" style="align-self:end;"><label class="check"><input type="checkbox" ${RF.faltas?'checked':''} onchange="RF.faltas=this.checked"> incluir faltas</label></div>`);
   if(f.includes('naoColetados')) campos.push(`<div class="field w2" style="align-self:end;"><label class="check"><input type="checkbox" ${RF.naoColetados?'checked':''} onchange="RF.naoColetados=this.checked"> só os pedidos ainda não coletados</label></div>`);
   if(f.includes('alterados')) campos.push(`<div class="field w2" style="align-self:end;"><label class="check"><input type="checkbox" ${RF.alterados?'checked':''} onchange="RF.alterados=this.checked"> só resultados alterados</label></div>`);
@@ -4487,7 +4508,7 @@ async function gerarRelatorio(){
   catch(e){ console.error(e); RES={erro:'Falha ao gerar: '+e.message}; }
   registrarAcao('Gerou o relatório: '+r.t); render(true);
 }
-function relFiltrosTexto(){ const r=relDef(); const t=[]; if(r.f.includes('periodo')) t.push('Período: '+fmtData(RF.ini)+' a '+fmtData(RF.fim)); if(r.f.includes('unidade')) t.push('Unidade: '+(nomeDe('unidades',RF.unidade)||'todas')); if(r.f.includes('unidadeSol')) t.push('Unidade solicitante: '+(nomeDe('unidades',RF.unidade)||'todas')); if(RF.labExame&&r.f.includes('labExame')) t.push('Exame: '+nomeDe('labExames',RF.labExame)); if(RF.alterados&&r.f.includes('alterados')) t.push('Só alterados'); if(RF.farmaLocal&&r.f.includes('farmaLocal')) t.push('Local: '+nomeDe('farmaLocais',RF.farmaLocal)); if(RF.farmaProduto&&r.f.includes('farmaProduto')) t.push('Produto: '+nomeDe('farmaProdutos',RF.farmaProduto)); if(RF.profissional&&r.f.includes('profissional')) t.push('Profissional: '+nomeDe('profissionais',RF.profissional)); if(RF.especialidade&&r.f.includes('especialidade')) t.push('Especialidade: '+nomeDe('especialidades',RF.especialidade)); if(r.mod==='hosp'){ if(r.f.includes('hospBase')) t.push('Pela data da '+(RF.hospBase==='alta'?'alta':'internação')); if(RF.hospSetor&&r.f.includes('hospSetor')) t.push('Setor: '+nomeDe('hospSetores',RF.hospSetor)); if(RF.hospConvenio&&r.f.includes('hospConvenio')) t.push('Convênio: '+(nomeDe('convenios',RF.hospConvenio)||RF.hospConvenio)); if(RF.hospClinica&&r.f.includes('hospClinica')) t.push('Clínica: '+nomeDe('hospClinicas',RF.hospClinica)); if(RF.hospMunicipio&&r.f.includes('hospMunicipio')) t.push('Município: '+RF.hospMunicipio); if(r.f.includes('hospData')) t.push('Data: '+fmtData(RF.hospData)); if(r.f.includes('hospMes')) t.push('Mês: '+fmtMes(RF.hospMes)); if(RF.hospAbertas&&r.f.includes('hospAbertas')) t.push('Com internações em aberto'); } return t.join(' · '); }
+function relFiltrosTexto(){ const r=relDef(); const t=[]; if(r.f.includes('periodo')) t.push('Período: '+fmtData(RF.ini)+' a '+fmtData(RF.fim)); if(r.f.includes('unidade')) t.push('Unidade: '+(nomeDe('unidades',RF.unidade)||'todas')); if(r.f.includes('unidadeSol')) t.push('Unidade solicitante: '+(nomeDe('unidades',RF.unidade)||'todas')); if(RF.labExame&&r.f.includes('labExame')) t.push('Exame: '+nomeDe('labExames',RF.labExame)); if(RF.alterados&&r.f.includes('alterados')) t.push('Só alterados'); if(RF.farmaLocal&&r.f.includes('farmaLocal')) t.push('Local: '+nomeDe('farmaLocais',RF.farmaLocal)); if(RF.farmaProduto&&r.f.includes('farmaProduto')) t.push('Produto: '+nomeDe('farmaProdutos',RF.farmaProduto)); if(RF.profissional&&r.f.includes('profissional')) t.push('Profissional: '+nomeDe('profissionais',RF.profissional)); if(RF.especialidade&&r.f.includes('especialidade')) t.push('Especialidade: '+nomeDe('especialidades',RF.especialidade)); if(r.f.includes('fatComp')) t.push('Competência: '+fmtMes(RF.fatComp)); if(RF.fatConvenio&&r.f.includes('fatConvenio')) t.push('Convênio: '+nomeDe('convenios',RF.fatConvenio)); if(r.mod==='hosp'){ if(r.f.includes('hospBase')) t.push('Pela data da '+(RF.hospBase==='alta'?'alta':'internação')); if(RF.hospSetor&&r.f.includes('hospSetor')) t.push('Setor: '+nomeDe('hospSetores',RF.hospSetor)); if(RF.hospConvenio&&r.f.includes('hospConvenio')) t.push('Convênio: '+(nomeDe('convenios',RF.hospConvenio)||RF.hospConvenio)); if(RF.hospClinica&&r.f.includes('hospClinica')) t.push('Clínica: '+nomeDe('hospClinicas',RF.hospClinica)); if(RF.hospMunicipio&&r.f.includes('hospMunicipio')) t.push('Município: '+RF.hospMunicipio); if(r.f.includes('hospData')) t.push('Data: '+fmtData(RF.hospData)); if(r.f.includes('hospMes')) t.push('Mês: '+fmtMes(RF.hospMes)); if(RF.hospAbertas&&r.f.includes('hospAbertas')) t.push('Com internações em aberto'); } return t.join(' · '); }
 function resultadoRelHTML(){
   if(RES.erro) return `<div class="alerta-aviso">${esc(RES.erro)}</div>`;
   const r=relDef(); const linhas=RES.linhas||[];
@@ -4765,11 +4786,12 @@ const GRUPOS_OPCIONAIS=['4. Programas de Saúde','5. Vacinas','6. Encaminhamento
 VIEWS.modulos=()=>{
   const ocultos=new Set(cfgGeral().modulosOcultos||[]);
   return `<div class="card"><h2>🧩 Programa Integral de Saúde — um sistema, vários módulos</h2><div class="subtitle">Todos os módulos usam os mesmos <b>cadastros gerais</b> (entidade, unidades, profissionais, pacientes), os mesmos <b>usuários e perfis</b> e o mesmo banco. Assim, um paciente cadastrado na recepção aparece na farmácia, no laboratório e no hospital sem digitar de novo.</div>
-    <div class="grid cols-3"><div class="stat"><div class="label">Módulos instalados</div><div class="value" style="font-size:17px;">🧭 Menu · 🩺 Ambulatório · 🧪 Laboratório · 💊 Farmácia · 🏥 Hospital</div><div class="hint">v. ${appVersao()} — equivalentes ao SIS_MENU, SIS_AMB, SIS_LABO, SIS_FARMA e SIS_HOSP</div></div><div class="stat azul"><div class="label">Telas disponíveis</div><div class="value">${Object.keys(MENU_ITENS).length}</div></div><div class="stat roxo"><div class="label">Tabelas de dados</div><div class="value">${Object.keys(TABELAS).length}</div></div></div></div>
+    <div class="grid cols-3"><div class="stat"><div class="label">Módulos instalados</div><div class="value" style="font-size:17px;">🧭 Menu · 🩺 Ambulatório · 🧪 Laboratório · 💊 Farmácia · 🏥 Hospital · 💵 Faturamento</div><div class="hint">v. ${appVersao()} — equivalentes ao SIS_MENU, SIS_AMB, SIS_LABO, SIS_FARMA, SIS_HOSP e SIS_FATU</div></div><div class="stat azul"><div class="label">Telas disponíveis</div><div class="value">${Object.keys(MENU_ITENS).length}</div></div><div class="stat roxo"><div class="label">Tabelas de dados</div><div class="value">${Object.keys(TABELAS).length}</div></div></div></div>
   ${isAdmin()?`<div class="card"><h2>Partes do Ambulatório em uso</h2><div class="subtitle">Desligue os grupos que o município não usa — eles somem do menu de todos (os dados ficam guardados e voltam ao religar).</div><div class="checks">${GRUPOS_OPCIONAIS.map(g=>{ const ids=(MENU.find(x=>x.g===g)||{itens:[]}).itens.map(i=>i.id); const on=!ids.every(i=>ocultos.has(i)); return `<label class="check"><input type="checkbox" ${on?'checked':''} onchange="moduloGrupo('${escJs(g)}',this.checked)"> ${esc(g)}</label>`; }).join('')}<label class="check"><input type="checkbox" ${!ocultos.has('zoonoses')?'checked':''} onchange="moduloItem('zoonoses',this.checked)"> Controle de Zoonoses</label></div></div>`:''}
   ${isAdmin()&&typeof LAB_VIEWS!=='undefined'?`<div class="card"><h2>🧪 Módulo Laboratório</h2><div class="subtitle">Requisição, coleta com etiqueta de código de barras, mapa de trabalho, digitação e liberação de resultados, laudos, laboratório de apoio, integração com equipamentos e relatórios. Desligue se o município não tem laboratório próprio (os dados ficam guardados).</div><label class="check"><input type="checkbox" ${!LAB_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloLab(this.checked)"> Módulo Laboratório em uso</label></div>`:''}
   ${isAdmin()&&typeof FARMA_VIEWS!=='undefined'?`<div class="card"><h2>💊 Módulo Farmácia</h2><div class="subtitle">Estoque por local, lote e validade, dispensação (inclusive controlados e pela receita do consultório), entradas com XML da nota, transferências, pedidos, inventário, alto custo e relatórios. Desligue se a farmácia não usa o sistema (os dados ficam guardados).</div><label class="check"><input type="checkbox" ${!FARMA_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloFarma(this.checked)"> Módulo Farmácia em uso</label></div>`:''}
   ${isAdmin()&&typeof HOSP_VIEWS!=='undefined'?`<div class="card"><h2>🏥 Módulo Hospital</h2><div class="subtitle">Mapa de leitos, internação (laudo da AIH, familiares, caução), troca de leito, alta e encerramento, prescrição que vai para a farmácia e para a checagem da enfermagem, evoluções, dietas, visitas, documentos e relatórios. Desligue se o município não tem hospital (os dados ficam guardados).</div><label class="check"><input type="checkbox" ${!HOSP_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloHosp(this.checked)"> Módulo Hospital em uso</label></div>`:''}
+  ${isAdmin()&&typeof FAT_VIEWS!=='undefined'?`<div class="card"><h2>💵 Módulo Faturamento</h2><div class="subtitle">BPA-MAG (arquivo do DATASUS), AIH e arquivo do SISAIH01, contas de convênio e guias TISS, CIH, consórcio, relatórios e atualização da Tabela Unificada. A Produção (BPA) continua disponível mesmo com o módulo desligado.</div><label class="check"><input type="checkbox" ${!FAT_VIEWS.every(i=>ocultos.has(i))?'checked':''} onchange="moduloFat(this.checked)"> Módulo Faturamento em uso</label></div>`:''}
   <div class="card"><h2>Próximos módulos planejados</h2><div class="grid cols-2">${MODULOS_PLANEJADOS.map(m=>`<div style="border:1px dashed var(--line);border-radius:10px;padding:12px;"><div style="font-weight:700;">${m[0]} ${esc(m[1])} <span class="badge cinza">planejado</span></div><div class="small muted" style="margin-top:4px;line-height:1.5;">${esc(m[2])}</div></div>`).join('')}</div></div>
   <div class="card"><h2>Outros aplicativos da Secretaria</h2><div class="subtitle">Usam o mesmo login (e-mail e senha) e o mesmo projeto do Firebase.</div><div class="actions">${APPS_SECRETARIA.map(a=>`<a class="btn secondary" href="${a[2]}" target="_blank" rel="noopener">${a[0]} ${esc(a[1])} ↗</a>`).join('')}</div></div>
   <details class="card"><summary style="cursor:pointer;font-weight:700;">🛠️ Para quem for desenvolver um módulo novo</summary><ol style="font-size:12.5px;line-height:1.7;">
@@ -4794,7 +4816,7 @@ VIEWS.backup=()=>{
 async function exportarBackup(){
   const meses=mesesEntre((cfgGeral().inicio||mesDe(hojeISO()))+'-01', addMeses(mesDe(hojeISO()),12)+'-01');
   carregandoMsg(true,'Reunindo todos os dados…');
-  try{ await Promise.all(Object.keys(TABELAS).filter(t=>TABELAS[t].modo==='mes').map(t=>garantirMeses(t, meses))); } catch(e){ showToast('Parte dos meses não pôde ser lida: '+msgErro(e),'warning'); } finally{ carregandoMsg(false); }
+  try{ await Promise.all(Object.keys(TABELAS).filter(t=>TABELAS[t].modo==='mes').map(t=>garantirMeses(t, meses))); await garantirTabela(Object.keys(TABELAS).filter(t=>TABELAS[t].sobDemanda)); } catch(e){ showToast('Parte dos meses não pôde ser lida: '+msgErro(e),'warning'); } finally{ carregandoMsg(false); }
   const tab={}; Object.keys(TABELAS).filter(t=>tabelaPermitida(t)).forEach(t=>{ tab[t]=lista(t); });
   const obj={_tipo:'backup-programa-integral-saude', versao:appVersao(), exportadoEm:agoraLocal(), por:usuarioCurto(), entidade:entidadeNome(), usuarios:USERS_STATE, tabelas:tab};
   baixarArquivo(JSON.stringify(obj), 'backup_programa_integral_saude_'+hojeISO()+'.json', 'application/json');
@@ -4805,6 +4827,7 @@ async function importarBackup(ev){
   let obj; try{ obj=JSON.parse(await f.text()); }catch(e){ out.innerHTML='<div class="alerta-erro">Arquivo inválido.</div>'; return; }
   if(!obj || obj._tipo!=='backup-programa-integral-saude' || !obj.tabelas){ out.innerHTML='<div class="alerta-erro">Este arquivo não é uma cópia de segurança do Programa Integral de Saúde.</div>'; return; }
   const sub=document.querySelector('input[name=bkModo]:checked').value==='sub';
+  try{ await garantirTabela(Object.keys(obj.tabelas).filter(t=>TABELAS[t] && TABELAS[t].sobDemanda)); }catch(e){ out.innerHTML='<div class="alerta-erro">Não foi possível ler as tabelas atuais: '+esc(msgErro(e))+'</div>'; return; }
   const plano=Object.keys(obj.tabelas).filter(t=>TABELAS[t] && tabelaPermitida(t)).map(t=>{ const recs=(obj.tabelas[t]||[]).filter(r=>r&&r.id); const novos=recs.filter(r=>!DB[t].has(r.id)); const iguais=recs.filter(r=>DB[t].has(r.id)); return {t, recs:sub?recs:novos, novos:novos.length, exist:iguais.length}; });
   const total=plano.reduce((s,p)=>s+p.recs.length,0);
   if(!total){ out.innerHTML='<div class="alerta-ok">Nada a restaurar: todos os registros do arquivo já existem.</div>'; return; }
@@ -6772,7 +6795,7 @@ function expValor(v){ if(v===undefined||v===null) return ''; if(typeof v==='bool
 async function exportarTabelas(){
   const sel=[...EXPX.sel].filter(t=>TABELAS[t] && tabelaPermitida(t)); if(!sel.length){ showToast('Marque ao menos uma tabela.','warning'); return; }
   if(EXPX.ini>EXPX.fim){ showToast('A data inicial é maior que a final.','warning'); return; }
-  const mensais=sel.filter(t=>TABELAS[t].modo==='mes'); if(mensais.length) await garantirPeriodo(mensais, EXPX.ini, EXPX.fim);
+  const mensais=sel.filter(t=>TABELAS[t].modo==='mes'); if(mensais.length) await garantirPeriodo(mensais, EXPX.ini, EXPX.fim); await garantirTabela(sel);
   const dados={}; sel.forEach(t=>{ let l=lista(t); if(TABELAS[t].modo==='mes'){ const c=TABELAS[t].campo; l=l.filter(r=>{ const d=String(r[c]||'').slice(0,10); return d>=EXPX.ini && d<=EXPX.fim; }); } dados[t]=l; });
   const nome='Programa Integral de Saúde — exportação '+hojeISO();
   if(EXPX.formato==='json'){ baixarArquivo(JSON.stringify({sistema:APP_NOME, versao:appVersao(), entidade:entidadeFantasia(), exportadoEm:agoraLocal(), exportadoPor:usuarioCurto(), periodo:[EXPX.ini, EXPX.fim], tabelas:dados}, null, 1), nomeArquivo(nome)+'.json', 'application/json'); }
@@ -6898,6 +6921,7 @@ const VERSOES=[
   ['1.04.2026','14/10/2026','MÓDULO MENU (equivalente ao SIS_MENU): cadastros comuns saem do Ambulatório; funcionários, mantenedores, tipos de logradouro, municípios do IBGE, exportar tabelas, recados, unificar profissionais, conexão e ajuda.'],
   ['1.05.2026','14/10/2026','MÓDULO FARMÁCIA (equivalente ao SIS_FARMA): dispensação (inclusive pela receita do consultório e controlados), uso contínuo, alto custo, estoque por local e lote, entradas com XML da nota, saídas, transferências, pedidos, inventário e relatórios.'],
   ['1.06.2026','14/10/2026','MÓDULO HOSPITAL (equivalente ao SIS_HOSP): mapa de leitos, internação com laudo da AIH, troca de leito, alta, conferência, prescrição → farmácia e enfermagem, evoluções, dietas, visitas, documentos e relatórios. Na Farmácia, "Receitas a Dispensar": a receita do consultório chega sozinha.'],
+  ['1.07.2026','14/10/2026','MÓDULO FATURAMENTO (equivalente ao SIS_FATU): arquivo do BPA-MAG e do SISAIH01 nos layouts oficiais do DATASUS, AIH a partir da internação, contas de convênio com guias TISS, CIH, consórcio, relatórios e atualização da Tabela Unificada (SIGTAP). A Produção (BPA) passou do Ambulatório para o Faturamento.'],
 ];
 VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
   <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div></div>
@@ -9172,6 +9196,747 @@ async function seedDemoHosp(){
 /* Exportar Tabelas (Módulo Menu): nomes legíveis das tabelas e das ligações do hospital */
 if(typeof EXP_REFS!=='undefined') Object.assign(EXP_REFS, {leitoId:'hospLeitos', setorId:'hospSetores', quartoId:'hospQuartos', clinicaId:'hospClinicas', caraterId:'hospCarater', categoriaId:'hospCategorias', tipoAltaId:'hospTiposAlta', dietaId:'hospDietas', profResponsavelId:'profissionais', profSolicitanteId:'profissionais', prescritorId:'profissionais', produtoId:'farmaProdutos', fornecedorId:'farmaFornecedores'});
 if(typeof TAB_TITULOS!=='undefined') Object.assign(TAB_TITULOS, {farmaReceitas:'Receitas a dispensar (farmácia)', hospInternacoes:'Internações', hospSolicitacoes:'Solicitações de internação', hospLaudos:'Laudos de internação e resumos de alta', hospRegistros:'Prescrições, checagens e evoluções da internação', hospVisitas:'Visitas e acompanhantes', hospLeitosHist:'Histórico de situação dos leitos'});
+
+/* ============================================================
+   MÓDULO FATURAMENTO (equivalente ao SIS_FATU da Fiorilli) — 1.07
+   · SIA: produção e conferência do BPA, fechamento por competência e
+     ARQUIVO BPA-MAG (layout oficial da interface texto do BPA,
+     DATASUS 09/2020), importação de arquivos de outras unidades.
+   · SIH: lançamento da AIH a partir da internação (Módulo Hospital),
+     espelho, resumo e ARQUIVO DE IMPORTAÇÃO DO SISAIH01 (layout
+     oficial da interface texto, competência 07/2026, 1.800 posições).
+   · Convênios e particulares: conta da internação/atendimento, guias
+     no padrão TISS (impressas) e espelho da conta.
+   · CIH (internações não SUS), consórcio (recibos por município),
+     relatórios e atualização da Tabela Unificada (zip do SIGTAP).
+   Tabelas grandes de referência (compatibilidade procedimento × CBO,
+   CBO, procedimentos de convênio) são "sob demanda": só carregam
+   quando alguém do faturamento abre a tela que precisa delas.
+   ============================================================ */
+const FAT_GRUPOS_MENU=[
+  {g:'Visão Geral do Faturamento', ic:'💵', itens:[
+    {id:'fatPainel', r:'Painel do Faturamento', ic:'💵', d:'Competência atual: produção ambulatorial, BPA gerado ou não, AIHs a lançar e lançadas, contas de convênio abertas e pendências.'},
+  ]},
+  {g:'1. Cadastros do Faturamento', ic:'🗂️', itens:[
+    {id:'fatCompetencias', r:'Competências', ic:'📅', d:'Competências do faturamento ambulatorial (BPA-MAG) e hospitalar (apresentação da AIH), com vigência e situação.'},
+    {id:'fatConvenios', r:'Convênios e Planos', ic:'🤝', d:'Convênios e planos de saúde atendidos e suas regras de faturamento (registro ANS, tabela de preços, coeficientes).'},
+    {id:'fatTabelasPreco', r:'Tabelas, Coeficientes e Procedimentos', ic:'📚', d:'Tabelas de preço (TUSS, AMB92, CBHPM, própria), coeficientes, procedimentos de convênio, grupos de lançamento, porte anestésico e prestadores de serviço.'},
+    {id:'fatEquivalencias', r:'Medicamentos e Materiais × TISS', ic:'🔗', d:'Equivalência entre os produtos da farmácia e os códigos TISS/TUSS, Brasíndice e SIMPRO, com o preço de venda para as contas de convênio.'},
+    {id:'fatConfig', r:'Configurações do Faturamento', ic:'⚙️', d:'Dados do cabeçalho do BPA-MAG (órgão de origem e destino), órgão emissor e diretor clínico da AIH e outros parâmetros.'},
+  ]},
+  {g:'2. SIA — Ambulatorial (BPA)', ic:'🧾', itens:[
+    {id:'fatBpaFechamento', r:'Fechamento e Exportação BPA-MAG', ic:'📤', d:'Fecha a competência de uma ou mais unidades e gera o arquivo texto para o BPA-MAG do DATASUS; importa arquivos de outras unidades.'},
+  ]},
+  {g:'3. SIH — Hospitalar (AIH)', ic:'🏥', itens:[
+    {id:'fatAih', r:'Lançar AIH', ic:'📋', d:'AIH de cada internação SUS com alta: número, apresentação, procedimentos e profissionais, CID, parto, UTI e acidente de trabalho — com espelho da AIH.'},
+    {id:'fatSisaih', r:'Gerar Faturamento SISAIH01', ic:'📦', d:'Arquivo de importação para o SISAIH01 (layout oficial da interface texto) com crítica antes de gerar, e resumo da fatura de AIH.'},
+  ]},
+  {g:'4. Convênios e Particulares', ic:'🤝', itens:[
+    {id:'fatContas', r:'Lançar Fatura Convênio', ic:'🧮', d:'Conta da internação ou do atendimento de convênio/particular: procedimentos e OPM, diárias, medicamentos e materiais da farmácia, taxas — valor atualizado a cada lançamento.'},
+    {id:'fatGuias', r:'Emissão de Guias (TISS)', ic:'📑', d:'Guias de resumo de internação, SP/SADT, honorário individual, outras despesas e espelho da conta.'},
+  ]},
+  {g:'5. CIH e Consórcio', ic:'🔁', itens:[
+    {id:'fatCih', r:'Lançar CIH', ic:'🧾', d:'Comunicação de Internação Hospitalar: internações não SUS (convênio e particular) que o DATASUS exige informar.'},
+    {id:'fatConsorcio', r:'Consórcio — Municípios e Recibos', ic:'🏘️', d:'Municípios integrantes com suas cotas, fechamento do mês (recibos por município) e impressão dos recibos.'},
+  ]},
+  {g:'6. Relatórios e Atualizações', ic:'📈', itens:[
+    {id:'fatRelatorios', r:'Relatórios do Faturamento', ic:'📈', d:'Fatura (boletim de produção), faturamento analítico e resumido, procedimentos × quantidade, comparativo, produção por município e profissional, AIH, convênios e consórcio.'},
+    {id:'fatAtualizacoes', r:'Atualizar Tabela Unificada (SIGTAP)', ic:'🔄', d:'Atualiza procedimentos, valores, instrumento de registro e compatibilidade com CBO pelo arquivo da competência baixado do SIGTAP; preços Brasíndice/ABCFarma.'},
+  ]},
+];
+/* a "Produção (BPA)" do Ambulatório passa para o Faturamento (como no SIS, onde fica no SIS_FATU) — mesmo id, mesmas permissões */
+(function(){ const g8=MENU.find(g=>g.itens.some(i=>i.id==='bpa')); if(g8){ const it=g8.itens.find(i=>i.id==='bpa'); g8.itens=g8.itens.filter(i=>i.id!=='bpa'); it.r='Produção e Conferência do BPA'; FAT_GRUPOS_MENU[2].itens.unshift(it); } })();
+FAT_GRUPOS_MENU.forEach(g=>{ MENU.push(g); g.itens.forEach(it=>{ it.grupo=g.g; MENU_ITENS[it.id]=it; }); });
+MODULOS_MENU.push({id:'fat', nome:'MÓDULO FATURAMENTO', ic:'💵', grupos:FAT_GRUPOS_MENU.map(g=>g.g), badges:['fatAih','fatContas']});
+const FAT_VIEWS=FAT_GRUPOS_MENU.flatMap(g=>g.itens.map(i=>i.id)).filter(v=>v!=='bpa');
+(function(){
+  const todos=n=>Object.fromEntries(FAT_VIEWS.map(v=>[v,n]));
+  PERFIS_PADRAO.push({id:'fatConvenios', nome:'Faturamento — Convênios e Particulares', clinico:true, perm:{fatPainel:1, fatContas:2, fatGuias:2, fatConvenios:2, fatTabelasPreco:2, fatEquivalencias:2, fatCih:2, fatRelatorios:1, pacientes:1, modulos:1, hospInternacoes:1}});
+  const add=(id,o)=>{ const p=PERFIS_PADRAO.find(x=>x.id===id); if(p && p.perm && typeof p.perm==='object') Object.assign(p.perm, o); };
+  add('faturamento', Object.assign(todos(2), {fatConfig:1, fatAtualizacoes:2}));
+  add('hospFaturamento', Object.assign(todos(2), {bpa:1, fatConfig:1}));
+})();
+const _rotuloFat=rotuloDe;
+rotuloDe=function(tab, rec){
+  if(rec && tab==='fatProcConv') return (rec.codigo?rec.codigo+' — ':'')+(rec.nome||'');
+  if(rec && tab==='fatPlanos') return nomeDe('convenios', rec.convenioId)+' — '+(rec.nome||'');
+  if(rec && tab==='fatConsMunicipios') return (rec.nome||'')+(rec.ibge?' ('+rec.ibge+')':'');
+  return _rotuloFat(tab, rec);
+};
+
+/* ---------------- Cadastros ---------------- */
+(function(){ /* campos novos (opcionais) no cadastro de convênios — os registros que já existem não mudam */
+  const c=CADS.convenios; if(c && !c.campos.some(x=>x.k==='registroANS')){ const at=c.campos.findIndex(x=>x.k==='ativo');
+    c.campos.splice(at<0?c.campos.length:at, 0, {k:'tipoConv', r:'Tipo', t:'sel', op:['CONVÊNIO / PLANO DE SAÚDE','PARTICULAR','SUS (OUTRO GESTOR)','CONSÓRCIO','OUTRO']}, {k:'registroANS', r:'Registro ANS', dica:'6 dígitos — vai nas guias TISS'}, {k:'cnpj', r:'CNPJ', t:'cnpj'}, {k:'codigoPrestador', r:'Código do prestador na operadora'}, {k:'tabelaId', r:'Tabela de procedimentos', t:'ref', tab:'fatTabelas', w:2}, {k:'coeficienteId', r:'Coeficiente (valor do CH/UCO)', t:'ref', tab:'fatCoeficientes', w:2}, {k:'tabelaMedId', r:'Preço de medicamentos', t:'sel', op:['PREÇO DE REFERÊNCIA DA FARMÁCIA','BRASÍNDICE','SIMPRO','ABCFARMA']}, {k:'acrescimoMed', r:'Acréscimo sobre medicamentos/materiais (%)', t:'num'}, {k:'prazoDias', r:'Prazo de pagamento (dias)', t:'int'}, {k:'tissVersao', r:'Versão TISS', ph:'Ex.: 4.01.00'}, {k:'contato', r:'Contato / telefone', w:2}, {k:'obs', r:'Observações', t:'area', w:4, linhas:2});
+    c.cols=[['nome','Convênio'],['tipoConv','Tipo'],['registroANS','ANS'],['tabelaId','Tabela'],['ativo','Situação']]; c.view='fatConvenios'; }
+  if(CADS.procedimentos){ const ins=CADS.procedimentos.campos.find(x=>x.k==='instrumento'); if(ins && Array.isArray(ins.op) && !ins.op.includes('AIH')) ins.op.splice(ins.op.length-1, 0, 'AIH'); }
+})();
+Object.assign(CADS, {
+  fatCompetencias:{tab:'fatCompetencias', titulo:'Competências', view:'fatCompetencias', ajuda:'Em branco, a competência é o mês do calendário. Cadastre quando o gestor definir outra vigência (ex.: de 21 a 20).',
+    campos:[{k:'competencia', r:'Competência (AAAA-MM)', obr:true, unico:true, ph:'2026-10'},{k:'inicio', r:'Início da vigência', t:'data', obr:true},{k:'fim', r:'Fim da vigência', t:'data', obr:true},{k:'situacao', r:'Situação', t:'sel', op:['ABERTA','FECHADA'], padrao:'ABERTA', vazio:false},{k:'obs', r:'Observações', w:4}],
+    cols:[['competencia','Competência'],['inicio','Início'],['fim','Fim'],['situacao','Situação']], busca:['competencia']},
+  fatPlanos:{tab:'fatPlanos', titulo:'Planos', view:'fatConvenios', campos:[{k:'convenioId', r:'Convênio', t:'ref', tab:'convenios', obr:true, w:2},{k:'nome', r:'Plano', obr:true, w:2, maiusc:true},{k:'acomodacao', r:'Acomodação', t:'sel', op:['ENFERMARIA','APARTAMENTO']},{k:'codigo', r:'Código do plano'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['convenioId','Convênio'],['nome','Plano'],['acomodacao','Acomodação'],['ativo','Situação']], busca:['nome']},
+  fatTabelas:{tab:'fatTabelas', titulo:'Tabelas de preço', view:'fatTabelasPreco', campos:[{k:'nome', r:'Tabela', obr:true, w:2, maiusc:true, unico:true},{k:'tipo', r:'Tipo', t:'sel', op:['TUSS','AMB92','CBHPM','SIGTAP (SUS)','PRÓPRIA'], obr:true},{k:'codigoTiss', r:'Código da tabela no TISS', ph:'Ex.: 22 (TUSS procedimentos)'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Tabela'],['tipo','Tipo'],['codigoTiss','Cód. TISS'],['ativo','Situação']], busca:['nome']},
+  fatCoeficientes:{tab:'fatCoeficientes', titulo:'Coeficientes', view:'fatTabelasPreco', ajuda:'Índices para calcular o valor dos procedimentos de convênio: CH (honorário), UCO (custo operacional) e filme.', campos:[{k:'nome', r:'Coeficiente', obr:true, w:2, maiusc:true, unico:true},{k:'valorCH', r:'Valor do CH (R$)', t:'num', passo:'0.0001'},{k:'valorUCO', r:'Valor da UCO (R$)', t:'num', passo:'0.0001'},{k:'valorFilme', r:'Valor do m² de filme (R$)', t:'num', passo:'0.0001'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Coeficiente'],['valorCH','CH'],['valorUCO','UCO'],['valorFilme','Filme'],['ativo','Situação']], busca:['nome']},
+  fatProcConv:{tab:'fatProcConv', titulo:'Procedimentos de convênio', view:'fatTabelasPreco', importar:true, ajuda:'Procedimentos de cada tabela (TUSS, AMB92, CBHPM, própria). O valor sai do CH × coeficiente do convênio ou do valor fixo.', campos:[{k:'tabelaId', r:'Tabela', t:'ref', tab:'fatTabelas', obr:true, w:2},{k:'codigo', r:'Código', obr:true},{k:'nome', r:'Procedimento', obr:true, w:3, maiusc:true},{k:'grupoId', r:'Grupo de lançamento', t:'ref', tab:'fatGrupos', w:2},{k:'ch', r:'CH (honorário)', t:'num', passo:'0.01'},{k:'uco', r:'UCO', t:'num', passo:'0.01'},{k:'filme', r:'Filme (m²)', t:'num', passo:'0.0001'},{k:'porteId', r:'Porte anestésico', t:'ref', tab:'fatPortes'},{k:'auxiliares', r:'Nº de auxiliares', t:'int'},{k:'valor', r:'Valor fixo (R$)', t:'moeda', dica:'Se preenchido, vale no lugar do CH'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['codigo','Código'],['nome','Procedimento'],['tabelaId','Tabela'],['ch','CH'],['valor','Valor'],['ativo','Situação']], busca:['codigo','nome']},
+  fatGrupos:{tab:'fatGrupos', titulo:'Grupos de lançamento', view:'fatTabelasPreco', campos:[{k:'nome', r:'Grupo', obr:true, w:2, maiusc:true, unico:true},{k:'tipo', r:'Entra na conta como', t:'sel', op:['PROCEDIMENTO','DIÁRIA','TAXA','GASES MEDICINAIS','MEDICAMENTO','MATERIAL','OPM','ALUGUEL','OUTROS']},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Grupo'],['tipo','Tipo'],['ativo','Situação']], busca:['nome']},
+  fatPortes:{tab:'fatPortes', titulo:'Tabela de porte anestésico', view:'fatTabelasPreco', campos:[{k:'porte', r:'Porte', obr:true, unico:true},{k:'valor', r:'Valor (R$)', t:'moeda'},{k:'ch', r:'ou CH', t:'num'},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['porte','Porte'],['valor','Valor'],['ch','CH'],['ativo','Situação']], busca:['porte']},
+  fatPrestadores:{tab:'fatPrestadores', titulo:'Prestadores de serviço', view:'fatTabelasPreco', ajuda:'Empresas que prestam serviço dentro da internação (ex.: anestesia, laboratório terceirizado) — vão como prestador na AIH.', campos:[{k:'nome', r:'Prestador', obr:true, w:2, maiusc:true},{k:'cnpj', r:'CNPJ', t:'cnpj'},{k:'cnes', r:'CNES'},{k:'tipo', r:'Serviço', w:2},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Prestador'],['cnpj','CNPJ'],['cnes','CNES'],['tipo','Serviço'],['ativo','Situação']], busca:['nome','cnpj']},
+  fatConsMunicipios:{tab:'fatConsMunicipios', titulo:'Municípios integrantes', view:'fatConsorcio', campos:[{k:'nome', r:'Município', obr:true, w:2, maiusc:true, unico:true},{k:'ibge', r:'Código IBGE (6 dígitos)', obr:true},{k:'uf', r:'UF', t:'uf'},{k:'cotaMensal', r:'Cota mensal (R$)', t:'moeda'},{k:'tabelaValor', r:'Valor dos procedimentos', t:'sel', op:['TABELA SUS (SIGTAP)','TABELA SUS + COMPLEMENTO (%)'], vazio:false},{k:'complemento', r:'Complemento sobre a tabela SUS (%)', t:'num'},{k:'contato', r:'Responsável / contato', w:2},{k:'ativo', r:'Ativo', t:'sim', padrao:true}], cols:[['nome','Município'],['ibge','IBGE'],['cotaMensal','Cota mensal'],['ativo','Situação']], busca:['nome','ibge']},
+});
+Object.assign(SEED, {
+  fatTabelas:[['TUSS','TUSS','22'],['AMB 92','AMB92','01'],['CBHPM','CBHPM','05'],['TABELA PRÓPRIA','PRÓPRIA','00']].map(([nome,tipo,codigoTiss])=>({nome, tipo, codigoTiss})),
+  fatGrupos:[['HONORÁRIOS MÉDICOS','PROCEDIMENTO'],['SERVIÇOS HOSPITALARES','PROCEDIMENTO'],['DIÁRIAS','DIÁRIA'],['TAXAS','TAXA'],['GASES MEDICINAIS','GASES MEDICINAIS'],['MEDICAMENTOS','MEDICAMENTO'],['MATERIAIS','MATERIAL'],['ÓRTESES, PRÓTESES E MATERIAIS ESPECIAIS (OPM)','OPM'],['ALUGUÉIS DE EQUIPAMENTOS','ALUGUEL']].map(([nome,tipo])=>({nome, tipo})),
+});
+let TFATP='fatTabelas';
+VIEWS.fatTabelasPreco=()=>{ const t=['fatTabelas','fatCoeficientes','fatProcConv','fatGrupos','fatPortes','fatPrestadores']; if(!t.includes(TFATP)) TFATP='fatTabelas';
+  if(TFATP==='fatProcConv' && !exigirTabelas(['fatProcConv'])) return fatCarregando();
+  return `<div class="tabs">${t.map(x=>`<div class="tab ${TFATP===x?'active':''}" onclick="TFATP='${x}';render()">${esc(CADS[x].titulo)}${x==='fatProcConv'&&!SOB_DEMANDA_OK.has(x)?'':' <span class="n">'+lista(x).length+'</span>'}</div>`).join('')}</div>${viewCad(TFATP,{view:'fatTabelasPreco'})}`; };
+let TFATC='convenios';
+VIEWS.fatConvenios=()=>{ const t=['convenios','fatPlanos']; if(!t.includes(TFATC)) TFATC='convenios';
+  return `<div class="helpbox">Convênios e planos atendidos pela rede. Para o <b>SUS</b> não precisa cadastrar nada: a internação SUS vai para a AIH e o atendimento para o BPA. Os campos de faturamento (registro ANS, tabela, coeficiente) servem para as contas de convênio e as guias TISS.</div><div class="tabs">${t.map(x=>`<div class="tab ${TFATC===x?'active':''}" onclick="TFATC='${x}';render()">${esc(CADS[x].titulo)} <span class="n">${lista(x).length}</span></div>`).join('')}</div>${viewCad(TFATC,{view:'fatConvenios'})}`; };
+VIEWS.fatCompetencias=()=>`<div class="helpbox">Sem cadastro, cada competência é o mês do calendário (de 1º ao último dia). A situação <b>FECHADA</b> é marcada sozinha quando o BPA-MAG da competência é gerado e avisa quem lançar produção depois.</div>`+viewCad('fatCompetencias',{view:'fatCompetencias'});
+
+/* ---------------- Configurações ---------------- */
+function fatCfg(){ const e=cfgEnt(); return Object.assign({orgaoNome:entidadeNome().slice(0,30), orgaoSigla:'SMS', orgaoCnpj:soDigitos(e.cnpj||''), destinoNome:'SECRETARIA MUNICIPAL DE SAUDE', destinoIndicador:'M', ibgeMunicipio:soDigitos(e.ibge||'').slice(0,6), orgaoEmissorAIH:'', diretorClinicoId:'', nacionalidadePadrao:'010', caraterBpaPadrao:'01', incluirPrincipalNaAih:true}, cfgGeral().fat||{}); }
+const FCF_CAMPOS=[
+  {k:'orgaoNome', r:'Órgão de origem (cabeçalho do BPA — até 30 letras)', w:2, maiusc:true},{k:'orgaoSigla', r:'Sigla do órgão (até 6)', maiusc:true},{k:'orgaoCnpj', r:'CNPJ do órgão responsável', t:'cnpj'},
+  {k:'destinoNome', r:'Órgão destino do arquivo (até 40 letras)', w:2, maiusc:true},{k:'destinoIndicador', r:'Destino', t:'sel', op:[['M','M — Secretaria Municipal'],['E','E — Secretaria Estadual']], vazio:false},{k:'ibgeMunicipio', r:'IBGE do município (6 dígitos)', dica:'Município do hospital na AIH e residência padrão'},
+  {k:'orgaoEmissorAIH', r:'Órgão emissor da AIH (10)', dica:'Portaria Conjunta 23/2004 — informado pelo gestor (ex.: M + IBGE + zeros)'},{k:'diretorClinicoId', r:'Diretor clínico do hospital (AIH)', t:'ref', tab:'profissionais', w:2},
+  {k:'nacionalidadePadrao', r:'Código da nacionalidade padrão', dica:'010 = brasileira'},{k:'caraterBpaPadrao', r:'Caráter de atendimento padrão no BPA-I', t:'sel', op:[['01','01 — Eletivo'],['02','02 — Urgência']], vazio:false},
+  {k:'incluirPrincipalNaAih', r:'Na AIH, repetir o procedimento principal na lista de procedimentos realizados (com o médico)', t:'sim', w:4},
+];
+VIEWS.fatConfig=()=>`<div class="card"><h2>⚙️ Configurações do faturamento</h2><div class="subtitle">Valem para todos os computadores. O CNES de cada unidade vem do cadastro de Unidades (Módulo Menu).</div>${formHTML('fcf', FCF_CAMPOS, fatCfg())}${pode('fatConfig')?`<div class="actions mt"><button class="btn" onclick="fatConfigSalvar()">💾 Salvar</button></div>`:''}</div>
+  <div class="card"><h2>Como as partes conversam</h2><ul style="line-height:1.8;font-size:13px;"><li>🩺 <b>Ambulatório e Laboratório → BPA:</b> fichas com pós-consulta, S.A.D.T., produção diária e exames liberados entram na produção da competência.</li><li>🏥 <b>Hospital → AIH:</b> internação SUS com alta (de preferência já conferida no Hospital) vira AIH com laudo, CID, procedimentos e profissionais preenchidos.</li><li>💊 <b>Farmácia → conta do convênio:</b> o que a farmácia dispensou para o internado entra na conta com o preço do produto.</li><li>🔄 <b>SIGTAP → tudo:</b> a atualização da Tabela Unificada traz valores, instrumento de registro e CBOs permitidos, que a conferência do BPA usa.</li></ul></div>`;
+function fatConfigSalvar(){ if(semPermissao('fatConfig')) return; const {d}=formLer('fcf', FCF_CAMPOS); d.orgaoCnpj=soDigitos(d.orgaoCnpj); d.ibgeMunicipio=soDigitos(d.ibgeMunicipio).slice(0,6); salvarConfig({fat:d}); registrarAcao('Alterou as configurações do faturamento'); showToast('Configurações salvas.','success'); }
+function moduloFat(ligar){ const o=new Set(cfgGeral().modulosOcultos||[]); FAT_VIEWS.forEach(i=>ligar?o.delete(i):o.add(i)); salvarConfig({modulosOcultos:[...o]}); registrarAcao((ligar?'Ligou':'Desligou')+' o Módulo Faturamento'); }
+function fatCarregando(){ return `<div class="card center muted" style="padding:30px;"><span class="spinner"></span> Carregando a tabela…</div>`; }
+
+/* ---------------- Competência ---------------- */
+function fatCompetencia(m){ const c=lista('fatCompetencias').find(x=>x.competencia===m); return c?{competencia:m, inicio:c.inicio, fim:c.fim, situacao:c.situacao||'ABERTA', rec:c}:{competencia:m, inicio:primeiroDiaMes(m), fim:ultimoDiaMes(m), situacao:'ABERTA', rec:null}; }
+function fatCompSel(valor, onch, n){ return `<select class="inp" style="width:auto;" onchange="${onch}">${mesesEntre(addMeses(mesDe(hojeISO()),-(n||13))+'-01', addMeses(mesDe(hojeISO()),1)+'-01').reverse().map(m=>`<option value="${m}" ${m===valor?'selected':''}>${fmtMes(m)}</option>`).join('')}</select>`; }
+function fatFecharCompetencia(m){ const c=fatCompetencia(m); salvar('fatCompetencias', Object.assign({}, c.rec||{competencia:m, inicio:c.inicio, fim:c.fim}, {situacao:'FECHADA', fechadaEm:agoraLocal(), fechadaPor:usuarioCurto()})); }
+
+/* ---------------- Valores ---------------- */
+function fatProc(c){ return acharPorChave('procedimentos','codigo',soDigitos(c))||null; }
+function fatValorSA(c){ const p=fatProc(c)||{}; return Number(p.vlSA!==undefined?p.vlSA:p.valor)||0; }      /* ambulatorial */
+function fatValorAIH(c){ const p=fatProc(c)||{}; if(p.vlSH!==undefined||p.vlSP!==undefined) return (Number(p.vlSH)||0)+(Number(p.vlSP)||0); return Number(p.valor)||0; }
+function fatSigtapEm(){ return (cfgGeral().fatSigtap||{}); }
+
+/* ---------------- Painel ---------------- */
+let FPF={mes:mesDe(hojeISO())};
+VIEWS.fatPainel=()=>{
+  const m=FPF.mes, c=fatCompetencia(m); const ant=addMeses(m,-1); const s=(l,v,h,cls,go)=>`<div class="stat ${cls||''} ${go&&podeVer(go)?'clic':''}" ${go&&podeVer(go)?`onclick="goto('${go}')"`:''}><div class="label">${l}</div><div class="value">${v}</div>${h?`<div class="hint">${h}</div>`:''}</div>`;
+  const fechs=lista('fatFechamentos'); const fechM=fechs.filter(f=>f.competencia===m), fechA=fechs.filter(f=>f.competencia===ant);
+  const sig=fatSigtapEm(); const clin=podeClinico();
+  const altasSemAih=typeof hospAbertas==='function'&&clin?fatAihPendentes(addDias(hojeISO(),-60)).length:0; const aihMes=clin?lista('fatAihs').filter(a=>a.apresentacao===m):[];
+  const contas=clin?lista('fatContas').filter(x=>x.situacao==='ABERTA'):[];
+  const passos=[[!!fatCfg().orgaoCnpj && !!fatCfg().orgaoNome,'Configurações (órgão de origem, CNPJ, destino do BPA)',"goto('fatConfig')"],[ativos('unidades').every(u=>u.cnes),'CNES de todas as unidades',"goto('unidades')"],[!!sig.competencia,'Atualizar a Tabela Unificada (SIGTAP)',"goto('fatAtualizacoes')"]];
+  const faltam=passos.filter(p=>!p[0]);
+  return `${faltam.length&&isAdmin()?`<div class="card" style="border-left:4px solid var(--amber);"><h2>🚀 Para faturar sem glosa</h2><div class="actions">${faltam.map(f=>`<button class="btn secondary" onclick="${f[2]}">⬜ ${esc(f[1])} →</button>`).join('')}</div></div>`:''}
+  <div class="flexrow mb"><div class="actions"><b>Competência</b> ${fatCompSel(m, "FPF.mes=this.value;render()")} <span class="badge ${c.situacao==='FECHADA'?'teal':'ambar'}">${c.situacao==='FECHADA'?'fechada':'aberta'}</span> <span class="small muted">vigência ${fmtData(c.inicio)} a ${fmtData(c.fim)}</span></div><div class="small muted">Tabela SIGTAP: ${sig.competencia?'<b>'+esc(fmtMes(sig.competencia))+'</b> (atualizada em '+esc(fmtData(String(sig.em||'').slice(0,10)))+')':'<span style="color:var(--red);">não atualizada</span>'}</div></div>
+  <div class="grid cols-6 mb">${s('BPA-MAG da competência', fechM.length?'✅ gerado':'⏳ não gerado', fechM.length?fmtNum(fechM.reduce((t,f)=>t+(f.qtdProcedimentos||0),0))+' procedimento(s)':'em Fechamento BPA-MAG', fechM.length?'ok':'alerta', 'fatBpaFechamento')}${s('Competência anterior', fechA.length?'✅ enviada':'—', fmtMes(ant), fechA.length?'':'perigo', 'fatBpaFechamento')}${s('Valor estimado SIA', fechM.length?fmtMoeda(fechM.reduce((t,f)=>t+(f.valorEstimado||0),0)):'—', 'tabela SUS (serviço ambulatorial)', 'azul', 'fatRelatorios')}${clin?s('Altas SUS sem AIH', altasSemAih, 'últimos 60 dias', altasSemAih?'perigo':'ok', 'fatAih'):''}${clin?s('AIHs da apresentação', aihMes.length, fmtMoeda(aihMes.reduce((t,a)=>t+(a.valorEstimado||0),0))+' estimados', 'roxo', 'fatSisaih'):''}${clin?s('Contas de convênio abertas', contas.length, fmtMoeda(contas.reduce((t,x)=>t+(x.total||0),0)), '', 'fatContas'):''}</div>
+  ${fechM.length?fatAlteradosDepoisHTML(m, fechM):''}
+  <div class="card"><h2>📅 Fechamentos do BPA-MAG</h2>${tabelaHTML(['Competência','Unidades','Linhas','Folhas','Procedimentos','Valor estimado','Controle','Gerado em','Por'], ordenarPor(fechs, f=>f.geradoEm).reverse().slice(0,12).map(f=>[fmtMes(f.competencia), esc((f.unidades||[]).map(u=>u.cnes).join(', ')), f.linhas, f.folhas, fmtNum(f.qtdProcedimentos||0), fmtMoeda(f.valorEstimado||0), f.controle, fmtDataHora(f.geradoEm).slice(0,16), esc(f.geradoPor||'')]), {html:true})}</div>`;
+};
+function fatAlteradosDepoisHTML(m, fechs){
+  const quando=fechs.map(f=>f.geradoEm).sort()[0]; const c=fatCompetencia(m); if(!MESES_OK.atendimentos.has(m)) return '';
+  const alt=lista('atendimentos').filter(a=>a.data>=c.inicio && a.data<=c.fim && a.alteradoEm && a.alteradoEm>quando && (a.procedimentos||[]).length).length;
+  return alt?`<div class="alerta-aviso">⚠ ${alt} ficha(s) desta competência foram alteradas depois que o BPA-MAG foi gerado (${fmtDataHora(quando).slice(0,16)}). Se mudaram procedimentos, gere o arquivo de novo antes de enviar.</div>`:'';
+}
+
+/* ---------------- Atualizar a Tabela Unificada (SIGTAP) ---------------- */
+let FSIG=null;
+VIEWS.fatAtualizacoes=()=>{ const s=fatSigtapEm();
+  return `<div class="helpbox">Baixe o arquivo da competência no site do SIGTAP (<b>sigtap.datasus.gov.br</b> → Download → "TabelaUnificada_AAAAMM_vXXXX.zip") e escolha o .zip aqui. O sistema lê os layouts que vêm dentro do próprio arquivo e atualiza: nome, sexo, idade mínima e máxima, valores (SH, SA e SP), financiamento, <b>instrumento de registro</b> (BPA-C, BPA-I, AIH, APAC) e os <b>CBOs permitidos</b> em cada procedimento (usados na conferência do BPA). Nada é apagado.</div>
+  <div class="card"><h2>🔄 Tabela Unificada</h2><div class="small muted mb">Última atualização: ${s.competencia?'<b>'+esc(fmtMes(s.competencia))+'</b> — '+esc(fmtDataHora(s.em).slice(0,16))+' por '+esc(s.por||'')+' ('+fmtNum(s.procedimentos||0)+' procedimentos, '+fmtNum(s.compat||0)+' com CBO)':'nunca'}</div>
+    <div class="actions"><input type="file" id="fsigArq" accept=".zip" class="inp" style="max-width:420px;"><label class="check"><input type="checkbox" id="fsigTodos" checked> incluir todos os procedimentos da tabela (desmarcado: só atualiza os já cadastrados)</label><button class="btn" onclick="fatSigtapLer()">🔍 Ler o arquivo</button></div><div id="fsigRes" class="mt">${FSIG?fatSigtapResumoHTML():''}</div></div>
+  <div class="card"><h2>💊 Preços Brasíndice / ABCFarma / SIMPRO</h2><div class="subtitle">Planilha (xlsx/csv) com uma coluna de código (Brasíndice, SIMPRO ou EAN/código de barras) e uma de preço. Atualiza o preço de venda em "Medicamentos e Materiais × TISS".</div><div class="actions"><select class="inp" id="fprTipo" style="width:auto;"><option value="brasindice">Brasíndice</option><option value="simpro">SIMPRO</option><option value="abcfarma">ABCFarma (EAN)</option></select><input type="file" id="fprArq" accept=".xlsx,.xls,.csv,.txt" class="inp" style="max-width:360px;"><button class="btn secondary" onclick="fatPrecosImportar()">⭱ Importar preços</button></div><div id="fprRes" class="mt"></div></div>`; };
+const FSIG_LAYOUT_PADRAO={
+  tb_procedimento:{CO_PROCEDIMENTO:[1,10], NO_PROCEDIMENTO:[11,260], TP_COMPLEXIDADE:[261,261], TP_SEXO:[262,262], QT_MAXIMA_EXECUCAO:[263,266], QT_DIAS_PERMANENCIA:[267,270], VL_IDADE_MINIMA:[275,278], VL_IDADE_MAXIMA:[279,282], VL_SH:[283,294], VL_SA:[295,306], VL_SP:[307,318], CO_FINANCIAMENTO:[319,320], DT_COMPETENCIA:[331,336]},
+  rl_procedimento_registro:{CO_PROCEDIMENTO:[1,10], CO_REGISTRO:[11,12]}, rl_procedimento_ocupacao:{CO_PROCEDIMENTO:[1,10], CO_OCUPACAO:[11,16]},
+  tb_ocupacao:{CO_OCUPACAO:[1,6], NO_OCUPACAO:[7,156]}, tb_financiamento:{CO_FINANCIAMENTO:[1,2], NO_FINANCIAMENTO:[3,102]}, tb_registro:{CO_REGISTRO:[1,2], NO_REGISTRO:[3,52]},
+};
+async function fatSigtapLer(){
+  if(semPermissao('fatAtualizacoes')) return; const f=document.getElementById('fsigArq').files[0]; if(!f){ showToast('Escolha o arquivo .zip do SIGTAP.','warning'); return; }
+  const out=document.getElementById('fsigRes'); out.innerHTML='<span class="spinner"></span> Lendo o arquivo do SIGTAP…';
+  try{
+    await impCarregarJSZip(); const zip=await JSZip.loadAsync(f); const arqs=Object.values(zip.files).filter(x=>!x.dir);
+    const acha=n=>arqs.find(x=>new RegExp('(^|/)'+n+'\\.txt$','i').test(x.name));
+    const txt=async x=>new TextDecoder('windows-1252').decode(await x.async('uint8array'));
+    const layout=async n=>{ const x=acha(n+'_layout'); if(!x) return null; const cols={}; (await txt(x)).replace(/\r/g,'').split('\n').slice(1).forEach(l=>{ const p=l.split(','); if(p.length>=4 && p[0].trim() && Number(p[2])) cols[p[0].trim().toUpperCase()]=[Number(p[2]), Number(p[3])]; }); return Object.keys(cols).length?cols:null; };
+    const tabela=async n=>{ const x=acha(n); if(!x) return []; const lay=(await layout(n))||FSIG_LAYOUT_PADRAO[n]; return (await txt(x)).replace(/\r/g,'').split('\n').filter(l=>l.trim()).map(l=>{ const o={}; for(const k in lay){ o[k]=l.slice(lay[k][0]-1, lay[k][1]).trim(); } return o; }); };
+    const procs=await tabela('tb_procedimento'); if(!procs.length) throw new Error('não achei o tb_procedimento.txt dentro do .zip — é o arquivo da Tabela Unificada?');
+    const regs=await tabela('rl_procedimento_registro'), ocup=await tabela('rl_procedimento_ocupacao'), cbos=await tabela('tb_ocupacao'), fins=await tabela('tb_financiamento'), tregs=await tabela('tb_registro');
+    const comp=(procs.find(p=>p.DT_COMPETENCIA)||{}).DT_COMPETENCIA||''; const reg={}; regs.forEach(r=>{ (reg[r.CO_PROCEDIMENTO]=reg[r.CO_PROCEDIMENTO]||[]).push(r.CO_REGISTRO); });
+    const cmp={}; ocup.forEach(r=>{ (cmp[r.CO_PROCEDIMENTO]=cmp[r.CO_PROCEDIMENTO]||[]).push(r.CO_OCUPACAO); });
+    FSIG={comp:comp?comp.slice(0,4)+'-'+comp.slice(4,6):'', procs, reg, cmp, cbos, fins:Object.fromEntries(fins.map(x=>[x.CO_FINANCIAMENTO, x.NO_FINANCIAMENTO])), tregs:Object.fromEntries(tregs.map(x=>[x.CO_REGISTRO, x.NO_REGISTRO])), arquivo:f.name};
+    await garantirTabela(['fatCompatCbo','fatCbos']); out.innerHTML=fatSigtapResumoHTML();
+  }catch(e){ console.error(e); FSIG=null; out.innerHTML=`<div class="alerta-erro">Não foi possível ler: ${esc(e.message||e)}</div>`; }
+}
+const FSIG_INSTR={'01':'BPA-C','02':'BPA-I','03':'AIH','04':'AIH','05':'AIH','06':'APAC','07':'APAC'};
+function fatSigtapInstrumento(regs, atual){
+  const r=regs||[]; const ok=new Set(r.map(x=>FSIG_INSTR[x]).filter(Boolean));
+  if(atual && ok.has(atual)) return atual; if(r.includes('02') && !r.includes('01')) return 'BPA-I'; if(r.includes('01')) return 'BPA-C';
+  if(ok.has('APAC')) return 'APAC'; if(ok.has('AIH')) return 'AIH'; return atual||'NÃO SE APLICA';
+}
+function fatSigtapPlano(){
+  const todos=document.getElementById('fsigTodos')?document.getElementById('fsigTodos').checked:true; const ex=new Map(lista('procedimentos').map(p=>[soDigitos(p.codigo), p]));
+  const novos=[], alterados=[]; let instrCorrig=0;
+  FSIG.procs.forEach(p=>{ const cod=soDigitos(p.CO_PROCEDIMENTO); if(cod.length!==10) return; const e=ex.get(cod); if(!e && !todos) return;
+    const imin=Number(p.VL_IDADE_MINIMA), imax=Number(p.VL_IDADE_MAXIMA); const sh=Number(p.VL_SH)/100||0, sa=Number(p.VL_SA)/100||0, sp=Number(p.VL_SP)/100||0;
+    const base={codigo:cod, nome:p.NO_PROCEDIMENTO, sexo:({F:'F',M:'M',I:'A',N:'A'})[p.TP_SEXO]||'A', idadeMin:isNaN(imin)?null:Math.floor(imin/12), idadeMax:isNaN(imax)||imax>=9999?null:Math.floor(imax/12), vlSH:sh, vlSA:sa, vlSP:sp, valor:Math.round((sa||sh+sp)*100)/100, grupo:cod.slice(0,2), financiamento:p.CO_FINANCIAMENTO||'', registros:FSIG.reg[p.CO_PROCEDIMENTO]||[], qtMaxima:Number(p.QT_MAXIMA_EXECUCAO)||null, diasPermanencia:Number(p.QT_DIAS_PERMANENCIA)||null, sigtapComp:FSIG.comp};
+    if(!e){ novos.push(Object.assign(base, {instrumento:fatSigtapInstrumento(base.registros, ''), ativo:true})); return; }
+    const instr=fatSigtapInstrumento(base.registros, e.instrumento); if(instr!==e.instrumento && e.instrumento) instrCorrig++;
+    const novo=Object.assign({}, e, base, {instrumento:instr}); if(['nome','sexo','idadeMin','idadeMax','vlSH','vlSA','vlSP','valor','financiamento','instrumento','qtMaxima','diasPermanencia'].some(k=>JSON.stringify(novo[k])!==JSON.stringify(e[k])) || JSON.stringify(novo.registros)!==JSON.stringify(e.registros)) alterados.push(novo); });
+  return {novos, alterados, instrCorrig};
+}
+function fatSigtapResumoHTML(){
+  const pl=fatSigtapPlano(); const nCmp=Object.keys(FSIG.cmp).length;
+  return `<div class="alerta-ok">Arquivo <b>${esc(FSIG.arquivo)}</b> — competência <b>${esc(FSIG.comp?fmtMes(FSIG.comp):'?')}</b>: ${fmtNum(FSIG.procs.length)} procedimentos, ${fmtNum(nCmp)} com CBOs permitidos, ${fmtNum(FSIG.cbos.length)} ocupações (CBO).</div>
+    <div class="grid cols-4 mb"><div class="stat"><div class="label">Procedimentos novos</div><div class="value">${fmtNum(pl.novos.length)}</div></div><div class="stat azul"><div class="label">Atualizados</div><div class="value">${fmtNum(pl.alterados.length)}</div><div class="hint">valores, nome, idade, sexo…</div></div><div class="stat ${pl.instrCorrig?'alerta':''}"><div class="label">Instrumento corrigido</div><div class="value">${pl.instrCorrig}</div><div class="hint">estava diferente do SIGTAP</div></div><div class="stat ok"><div class="label">Compatibilidade com CBO</div><div class="value">${fmtNum(nCmp)}</div></div></div>
+    ${pode('fatAtualizacoes')?`<button class="btn big" onclick="fatSigtapAplicar()">✅ Atualizar a tabela agora</button>`:''}<div id="fsigProg" class="mt"></div>`;
+}
+async function fatSigtapAplicar(){
+  if(!FSIG||semPermissao('fatAtualizacoes')) return; const pl=fatSigtapPlano(); if(!confirm(`Atualizar a Tabela Unificada (${fmtMes(FSIG.comp)}): ${pl.novos.length} novo(s), ${pl.alterados.length} atualizado(s) e a compatibilidade com CBO?`)) return;
+  const pr=document.getElementById('fsigProg'); const prog=(txt)=>(a,b)=>{ if(pr) pr.innerHTML=`<div class="small">${esc(txt)} — ${a} de ${b}</div><div class="progress"><div style="width:${Math.round(a*100/Math.max(1,b))}%"></div></div>`; };
+  try{
+    await garantirTabela(['fatCompatCbo','fatCbos']);
+    await salvarLote('procedimentos', pl.novos.concat(pl.alterados), prog('Procedimentos'));
+    const cmpRecs=Object.entries(FSIG.cmp).map(([c,l])=>({id:'p'+soDigitos(c), codigo:soDigitos(c), cbos:unicos(l).sort().join(' ')})).filter(r=>{ const e=obter('fatCompatCbo', r.id); return !e || e.cbos!==r.cbos; });
+    await salvarLote('fatCompatCbo', cmpRecs, prog('Compatibilidade com CBO'));
+    const cboRecs=FSIG.cbos.filter(x=>x.CO_OCUPACAO).map(x=>({id:'c'+x.CO_OCUPACAO, codigo:x.CO_OCUPACAO, nome:x.NO_OCUPACAO})).filter(r=>{ const e=obter('fatCbos', r.id); return !e || e.nome!==r.nome; });
+    await salvarLote('fatCbos', cboRecs, prog('Ocupações (CBO)'));
+    salvarConfig({fatSigtap:{competencia:FSIG.comp, em:agoraLocal(), por:usuarioCurto(), arquivo:FSIG.arquivo, procedimentos:FSIG.procs.length, compat:Object.keys(FSIG.cmp).length, financiamentos:FSIG.fins, registros:FSIG.tregs}});
+    registrarAcao('Atualizou a Tabela Unificada (SIGTAP '+FSIG.comp+'): '+pl.novos.length+' novos, '+pl.alterados.length+' atualizados'); FSIG=null; showToast('Tabela Unificada atualizada.','success'); render(true);
+  }catch(e){ console.error(e); showToast('Falha: '+msgErro(e),'error'); }
+}
+/* CBOs permitidos para um procedimento (null = tabela não carregada/sem informação) */
+function fatCbosPermitidos(cod){ if(!SOB_DEMANDA_OK.has('fatCompatCbo')) return null; const r=obter('fatCompatCbo','p'+soDigitos(cod)); return r?new Set(String(r.cbos||'').split(' ').filter(Boolean)):null; }
+function fatNomeCbo(c){ const r=SOB_DEMANDA_OK.has('fatCbos')?obter('fatCbos','c'+c):null; return r?r.nome:''; }
+
+/* ---------------- Medicamentos e materiais × TISS ---------------- */
+let FEQF={busca:'', so:''};
+VIEWS.fatEquivalencias=()=>{
+  if(typeof FARMA_VIEWS==='undefined') return '<div class="alerta-aviso">Precisa do Módulo Farmácia.</div>';
+  if(!exigirTabelas(['fatEquiv'])) return fatCarregando();
+  let l=ativos('farmaProdutos'); if(FEQF.busca){ const t=norm(FEQF.busca); l=l.filter(p=>norm(p.nome+' '+(p.codigo||'')+' '+(p.codigoBarras||'')).includes(t)); } if(FEQF.so==='sem') l=l.filter(p=>!(obter('fatEquiv','e'+p.id)||{}).codigoTuss);
+  l=ordenarTexto(l, p=>p.nome); const ed=pode('fatEquivalencias');
+  return `<div class="helpbox">Para cobrar dos convênios o que a farmácia entregou ao internado, cada produto precisa do código TISS/TUSS (tabela 18 = diárias e taxas, 19 = materiais, 20 = medicamentos) e do preço de venda. Preencha e tecle Tab — grava sozinho.</div>
+  <div class="card"><div class="actions mb"><input class="inp" style="max-width:280px;" placeholder="🔎 produto ou código" value="${esc(FEQF.busca)}" oninput="FEQF.busca=this.value;debRender()"><select class="inp" style="width:auto;" onchange="FEQF.so=this.value;render()"><option value="">Todos</option><option value="sem" ${FEQF.so==='sem'?'selected':''}>Sem código TISS</option></select><span class="small muted">${l.length} produto(s)</span></div>
+  <div class="table-wrap"><table><thead><tr><th>Produto</th><th>Tabela TISS</th><th>Código TUSS</th><th>Brasíndice</th><th>SIMPRO</th><th>Preço de venda (R$)</th><th>Preço de referência</th></tr></thead><tbody>${l.slice(0,400).map(p=>{ const e=obter('fatEquiv','e'+p.id)||{}; const inp=(k,w,ph)=>`<input class="inp" style="width:${w}px;" ${ed?'':'disabled'} value="${esc(e[k]??'')}" placeholder="${ph||''}" onchange="fatEquivSet('${p.id}','${k}',this.value)">`;
+    return `<tr><td><b>${esc(p.nome)}</b><div class="small muted">${esc(p.codigo||'')} ${esc(p.codigoBarras||'')}</div></td><td><select class="inp" style="width:auto;" ${ed?'':'disabled'} onchange="fatEquivSet('${p.id}','tabelaTiss',this.value)">${[['','—'],['20','20 Medicamentos'],['19','19 Materiais'],['18','18 Diárias e taxas'],['00','00 Própria']].map(o=>`<option value="${o[0]}" ${String(e.tabelaTiss||(p.tipo==='MEDICAMENTO'?'':''))===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></td><td>${inp('codigoTuss',110)}</td><td>${inp('codigoBrasindice',100)}</td><td>${inp('codigoSimpro',100)}</td><td>${inp('precoVenda',90,'0,00')}</td><td class="num">${p.precoReferencia?fmtMoeda(p.precoReferencia):''}</td></tr>`; }).join('')}</tbody></table></div></div>`;
+};
+function fatEquivSet(pid, k, v){ if(semPermissao('fatEquivalencias')) return; const id='e'+pid; const e=obter('fatEquiv', id)||{id, produtoId:pid}; const val=k==='precoVenda'?numBR(v):String(v).trim(); salvar('fatEquiv', Object.assign({}, e, {[k]:val})); }
+async function fatPrecosImportar(){
+  if(semPermissao('fatAtualizacoes')) return; const f=document.getElementById('fprArq').files[0]; const tipo=document.getElementById('fprTipo').value; const out=document.getElementById('fprRes'); if(!f){ showToast('Escolha a planilha.','warning'); return; }
+  try{ await garantirTabela(['fatEquiv']); const pl=await lerPlanilha(f); const cab=pl.cab.map(norm); const iC=cab.findIndex(h=>/COD|EAN|BARRA|TUSS/.test(h)), iP=cab.findIndex(h=>/PRECO|PMC|PF|VALOR/.test(h)); if(iC<0||iP<0) throw new Error('não achei as colunas de código e preço (títulos na 1ª linha)');
+    const preco=new Map(pl.linhas.map(l=>[soDigitos(l[iC])||String(l[iC]).trim(), numBR(l[iP])]).filter(x=>x[0]&&x[1]>0)); let n=0; const recs=[];
+    ativos('farmaProdutos').forEach(p=>{ const e=obter('fatEquiv','e'+p.id)||{id:'e'+p.id, produtoId:p.id}; const cod=tipo==='abcfarma'?soDigitos(p.codigoBarras):(tipo==='simpro'?soDigitos(e.codigoSimpro)||e.codigoSimpro:soDigitos(e.codigoBrasindice)||e.codigoBrasindice); const v=cod&&preco.get(cod); if(v && v!==e.precoVenda){ recs.push(Object.assign({}, e, {precoVenda:v, precoFonte:tipo, precoEm:hojeISO()})); n++; } });
+    if(recs.length) await salvarLote('fatEquiv', recs); registrarAcao('Importou preços '+tipo+': '+n+' produto(s)'); out.innerHTML=`<div class="alerta-ok">${n} produto(s) com preço atualizado (de ${preco.size} códigos na planilha).</div>`; }
+  catch(e){ out.innerHTML=`<div class="alerta-erro">${esc(e.message||e)}</div>`; }
+}
+
+/* ============================================================
+   MÓDULO FATURAMENTO — parte 2: SIA (BPA-MAG), SIH (AIH e SISAIH01)
+   e CIH. Os arquivos seguem os layouts oficiais do DATASUS:
+   · BPA: "Layout da interface texto do BPA" (circular 09/2020) —
+     cabeçalho 130 posições, BPA-C 48, BPA-I 338, + CR/LF.
+   · SISAIH01: "Layout da interface texto do SISAIH01" (07/2026) —
+     registro 01 (AIH principal) de 1.800 posições, + CR/LF.
+   ============================================================ */
+function fatAlfa(s){ return String(s??'').normalize('NFD').replace(/[̀-ͯ]/g,'').toUpperCase().replace(/[^A-Z0-9 \/()\-,.@_]/g,' ').replace(/\s+/g,' ').trim(); }
+const FX={
+  n:(v,t)=>{ const d=soDigitos(v); return (d||'0').slice(-t).padStart(t,'0'); },          /* numérico com zeros à esquerda */
+  nb:(v,t)=>{ const d=soDigitos(v); return d?d.slice(-t).padStart(t,'0'):' '.repeat(t); },  /* numérico ou brancos */
+  a:(v,t)=>fatAlfa(v).slice(0,t).padEnd(t,' '),                                           /* alfanumérico com brancos à direita */
+  z:t=>'0'.repeat(t), b:t=>' '.repeat(t), d:v=>{ const x=String(v||'').slice(0,10).replace(/-/g,''); return /^\d{8}$/.test(x)?x:'0'.repeat(8); },
+};
+function fatIbge6(v){ return soDigitos(v).slice(0,6); }
+function fatCid4(c){ return normCID(c||'').replace(/[^A-Z0-9]/g,'').slice(0,4); }
+const FAT_DNE_PADRAO={RUA:'081', R:'081', AVENIDA:'008', AV:'008'};
+function fatTipoLogradouro(logr){ const w=norm(String(logr||'').split(/\s+/)[0]||'').replace(/\./g,''); const t=ativos('tiposLogradouro').find(x=>norm(x.nome)===w || norm(x.abreviatura||'').replace(/\./g,'')===w); return (t&&soDigitos(t.codigoDNE))||FAT_DNE_PADRAO[w]||''; }
+function fatSemTipo(logr){ const partes=String(logr||'').trim().split(/\s+/); return fatTipoLogradouro(logr)&&partes.length>1?partes.slice(1).join(' '):String(logr||''); }
+function fatNac(p){ const n=norm(p.nacionalidade||'BRASILEIRA'); return /BRASIL|NATURAL/.test(n)?'010':''; }
+function fatEtnia(p){ return p.raca==='05'?soDigitos(p.etnia).slice(0,4):''; }
+function fatDocProf(prof){ const cns=soDigitos((prof||{}).cns), cpf=soDigitos((prof||{}).cpf); return cns.length===15?{ind:'2', doc:cns}:(cpf.length===11?{ind:'1', doc:cpf}:{ind:'0', doc:''}); }
+
+/* ---------------- SIA: produção da competência (base do BPA) ---------------- */
+async function fatBpaMontar(m, unidadeIds){
+  const c=fatCompetencia(m); await garantirPeriodo(['atendimentos','clinico','sadt','producao','labProducao'], c.inicio, c.fim); await garantirTabela(['fatCompatCbo']);
+  const itens=todosProcedimentos({ini:c.inicio, fim:c.fim, unidade:''}).filter(p=>(!unidadeIds || unidadeIds.includes(p.unidadeId)) && (p.fonte!=='F.A.' || (obter('atendimentos',p.atendimentoId)||{}).posLancada));
+  const cfg=fatCfg(); const cmp=m.replace('-',''); const C={}, I=[], O={}, pend=[]; let valor=0, qtd=0;
+  itens.forEach(p=>{
+    const pr=fatProc(p.codigo); const inst=pr?(pr.instrumento||'BPA-C'):'?'; const prof=obter('profissionais',p.profissionalId)||{}; const cbo=String(p.cbo||(obter('especialidades',prof.especialidadeId)||{}).cbo||'').trim(); const un=obter('unidades',p.unidadeId)||{};
+    const pac=p.pacienteId?pacDe(p.pacienteId):null; const idade=pac&&pac.nascimento?idadeAnos(pac.nascimento,p.data):null;
+    const cl=p.atendimentoId&&podeClinico()?obter('clinico',p.atendimentoId):null; const cid=p.cid||(cl&&cl.cidPrincipal)||'';
+    const ref=(pac?pac.nome+' — ':'')+fmtData(p.data)+' — '+fmtSigtap(p.codigo)+' ('+(un.nome||'sem unidade')+')';
+    if(!pr) pend.push([ref,'Procedimento não está na tabela SIGTAP cadastrada']);
+    if(!cbo) pend.push([ref,'Profissional sem CBO ('+(prof.nome||'não informado')+')']);
+    const perm=fatCbosPermitidos(p.codigo); if(cbo && perm && perm.size && !perm.has(cbo)) pend.push([ref,'CBO '+cbo+' não é permitido para este procedimento no SIGTAP']);
+    if(!un.cnes) pend.push([ref,'Unidade sem CNES']);
+    if(pr && pr.sexo && pr.sexo!=='A' && pac && pac.sexo && pac.sexo!==pr.sexo) pend.push([ref,'Sexo incompatível com o procedimento']);
+    if(pr && pac && idade!==null && ((pr.idadeMin!==null&&pr.idadeMin!==undefined&&idade<pr.idadeMin)||(pr.idadeMax&&idade>pr.idadeMax))) pend.push([ref,'Idade fora da faixa do procedimento']);
+    if(pr && pr.exigeCid && !cid) pend.push([ref,'Procedimento exige CID']);
+    const q=Number(p.qtd)||1;
+    if(inst==='BPA-I'){
+      if(!pac){ pend.push([ref,'BPA-I sem paciente (lançado em produção diária)']); return; }
+      if(!soDigitos(prof.cns)) pend.push([ref,'Profissional sem CNS ('+(prof.nome||'')+')']);
+      if(!soDigitos(pac.cns)) pend.push([ref,'Paciente sem CNS']);
+      I.push({unidadeId:un.id, cnes:un.cnes||'', cmp, cnsmed:soDigitos(prof.cns), cbo, dtaten:p.data, pa:soDigitos(p.codigo), cnspac:soDigitos(pac.cns), sexo:pac.sexo||'', ibge:fatIbge6(pac.ibge)||cfg.ibgeMunicipio, cid:fatCid4(cid), idade:idade??0, qt:q, caten:p.carater||cfg.caraterBpaPadrao, naut:p.autorizacao||'', nome:pac.nome||'', nasc:pac.nascimento||'', raca:pac.raca||'99', etnia:fatEtnia(pac), nac:fatNac(pac), cep:soDigitos(pac.cep), lograd:fatTipoLogradouro(pac.logradouro), end:pac.logradouro||'', compl:pac.complemento||'', num:pac.numero||'', bairro:pac.bairro||'', tel:soDigitos(pac.celular||pac.telefone), email:pac.email||'', ine:soDigitos(un.ine||''), pacNome:pac.nome});
+    } else if(inst==='BPA-C' || inst==='?'){ const k=[un.id, un.cnes||'', cbo, soDigitos(p.codigo), idade??0].join('|'); C[k]=(C[k]||0)+q; }
+    else { O[inst+'|'+p.codigo]=(O[inst+'|'+p.codigo]||0)+q; return; }
+    valor+=fatValorSA(p.codigo)*q; qtd+=q;
+  });
+  const linC=Object.entries(C).map(([k,q])=>{ const [unidadeId,cnes,cbo,pa,idade]=k.split('|'); return {unidadeId, cnes, cmp, cbo, pa, idade:Number(idade)||0, qt:q}; });
+  return {m, c, C:linC, I, O:Object.entries(O).map(([k,q])=>k.split('|').concat([q])), pend:unicos(pend.map(x=>JSON.stringify(x))).map(x=>JSON.parse(x)), valor:Math.round(valor*100)/100, qtd};
+}
+/* arquivo texto do BPA-MAG (layout oficial) */
+function fatBpaArquivo(r, importados){
+  const cfg=fatCfg(); const L=[]; let folhas=0; let soma=0;
+  const porCnes=agrupar(r.C, x=>x.cnes);
+  porCnes.forEach((arr, cnes)=>{ ordenarPor(arr, x=>x.pa+'|'+x.cbo+'|'+String(x.idade).padStart(3,'0')).forEach((x,k)=>{ const flh=Math.floor(k/20)+1, seq=k%20+1;
+    const s='02'+FX.n(cnes,7)+FX.n(x.cmp,6)+FX.a(x.cbo,6)+FX.n(flh,3)+FX.n(seq,2)+FX.n(x.pa,10)+FX.n(x.idade,3)+FX.n(x.qt,6)+'BPA'; if(s.length!==48) throw new Error('linha BPA-C com '+s.length+' posições'); L.push(s); soma+=Number(x.pa)+Number(x.qt); }); folhas+=Math.ceil(arr.length/20); });
+  const porCnesI=agrupar(r.I, x=>x.cnes);
+  porCnesI.forEach((arr, cnes)=>{ let flh=0; agrupar(ordenarPor(arr, x=>x.cnsmed+'|'+x.cbo+'|'+x.dtaten+'|'+x.pa), x=>x.cnsmed+'|'+x.cbo).forEach(grp=>{ grp.forEach((x,k)=>{ if(k%20===0) flh++; const seq=k%20+1;
+      const tel=soDigitos(x.tel).slice(0,11); const s='03'+FX.n(cnes,7)+FX.n(x.cmp,6)+FX.nb(x.cnsmed,15)+FX.a(x.cbo,6)+FX.d(x.dtaten)+FX.n(flh,3)+FX.n(seq,2)+FX.n(x.pa,10)+FX.nb(x.cnspac,15)+FX.a(x.sexo,1)+FX.nb(x.ibge,6)+FX.a(x.cid,4)+FX.n(x.idade,3)+FX.n(x.qt,6)+FX.nb(x.caten,2)+FX.nb(x.naut,13)+'BPA'
+        +FX.a(x.nome,30)+FX.d(x.nasc)+FX.nb(x.raca,2)+FX.nb(x.etnia,4)+FX.nb(x.nac,3)+FX.b(3)+FX.b(3)+FX.b(8)+FX.b(4)+FX.b(14)+FX.nb(x.cep,8)+FX.nb(x.lograd,3)+FX.a(fatSemTipo(x.end),30)+FX.a(x.compl,10)+FX.a(x.num||'SN',5)+FX.a(x.bairro,30)+(tel+' '.repeat(11)).slice(0,11)+FX.a(String(x.email||'').toUpperCase(),40)+FX.nb(x.ine,10);
+      if(s.length!==338) throw new Error('linha BPA-I com '+s.length+' posições'); L.push(s); soma+=Number(x.pa)+Number(x.qt); }); }); folhas+=flh; });
+  (importados||[]).forEach(t=>{ const ls=String(t).replace(/\r/g,'').split('\n').filter(l=>/^0[23]/.test(l)); const fl=new Set(); ls.forEach(l=>{ L.push(l); const ini=l.startsWith('02')?[26,36]:[49,59], q=l.startsWith('02')?[39,45]:[88,94]; soma+=Number(l.slice(ini[0],ini[1]))+Number(l.slice(q[0],q[1])); fl.add(l.slice(0,9)+'|'+(l.startsWith('02')?l.slice(21,24):l.slice(44,47))); }); folhas+=fl.size; });
+  const controle=(soma%1111)+1111;
+  const h='01'+'#BPA#'+FX.n(r.m.replace('-',''),6)+FX.n(L.length,6)+FX.n(folhas,6)+FX.n(controle,4)+FX.a(cfg.orgaoNome,30)+FX.a(cfg.orgaoSigla,6)+FX.n(cfg.orgaoCnpj,14)+FX.a(cfg.destinoNome,40)+FX.a(cfg.destinoIndicador||'M',1)+FX.a('PIS'+appVersao(),10);
+  if(h.length!==130) throw new Error('cabeçalho do BPA com '+h.length+' posições');
+  return {texto:[h].concat(L).join('\r\n')+'\r\n', linhas:L.length, folhas, controle};
+}
+let FBF={mes:addMeses(mesDe(hojeISO()),-1), unidades:null, res:null, fechar:true, imp:true};
+function fatUnidadesBpa(){ return ordenarTexto(ativos('unidades'), u=>u.nome); }
+VIEWS.fatBpaFechamento=()=>{
+  if(!FBF.unidades) FBF.unidades=new Set(fatUnidadesBpa().filter(u=>u.cnes).map(u=>u.id));
+  const c=fatCompetencia(FBF.mes); const imps=lista('fatBpaImportados').filter(x=>x.competencia===FBF.mes); const fechs=ordenarPor(lista('fatFechamentos'), f=>f.geradoEm).reverse(); const r=FBF.res;
+  return `<div class="helpbox">Como o <b>Fechamento BPAMAG</b> do SIS: escolha a competência e as unidades, confira as pendências e gere o <b>arquivo texto</b> (layout oficial do DATASUS) para importar no <b>BPA-MAG</b> (menu Importar). Entram as fichas com pós-consulta lançada, o S.A.D.T., a produção diária e os exames liberados pelo laboratório. Procedimentos de AIH, APAC e e-SUS não vão no BPA.</div>
+  <div class="card"><div class="formgrid"><div class="field"><label>Competência</label>${fatCompSel(FBF.mes, "FBF.mes=this.value;FBF.res=null;render()")}</div><div class="field w3"><label>Vigência</label><div class="small" style="padding-top:8px;">${fmtData(c.inicio)} a ${fmtData(c.fim)} · <span class="badge ${c.situacao==='FECHADA'?'teal':'ambar'}">${c.situacao.toLowerCase()}</span></div></div>
+    <div class="field w4"><label>Unidades</label><div class="checks">${fatUnidadesBpa().map(u=>`<label class="check" ${u.cnes?'':'title="Sem CNES — cadastre em Unidades"'}><input type="checkbox" ${FBF.unidades.has(u.id)?'checked':''} ${u.cnes?'':'disabled'} onchange="this.checked?FBF.unidades.add('${u.id}'):FBF.unidades.delete('${u.id}');FBF.res=null"> ${esc(u.nome)} <span class="small muted">${u.cnes?'CNES '+esc(u.cnes):'sem CNES'}</span></label>`).join('')}</div></div>
+    ${imps.length?`<div class="field w4"><label class="check"><input type="checkbox" ${FBF.imp?'checked':''} onchange="FBF.imp=this.checked"> incluir ${imps.length} arquivo(s) importado(s) de outras unidades (${imps.map(x=>'CNES '+esc(x.cnes)).join(', ')})</label></div>`:''}
+    <div class="field w4"><label class="check"><input type="checkbox" ${FBF.fechar?'checked':''} onchange="FBF.fechar=this.checked"> marcar a competência como FECHADA ao gerar o arquivo</label></div></div>
+    <div class="actions mt"><button class="btn secondary" onclick="fatBpaConferir()">🔎 Conferir a produção</button>${pode('fatBpaFechamento')?`<button class="btn" onclick="fatBpaGerar()">📤 Gerar arquivo BPA-MAG</button>`:''}</div></div>
+  ${r?`<div class="grid cols-4 mb"><div class="stat"><div class="label">Procedimentos</div><div class="value">${fmtNum(r.qtd)}</div><div class="hint">${fmtMoeda(r.valor)} (tabela SUS)</div></div><div class="stat azul"><div class="label">Linhas BPA-C</div><div class="value">${r.C.length}</div></div><div class="stat roxo"><div class="label">Linhas BPA-I</div><div class="value">${r.I.length}</div></div><div class="stat ${r.pend.length?'perigo':'ok'}"><div class="label">Pendências</div><div class="value">${r.pend.length}</div><div class="hint">podem virar glosa</div></div></div>
+    ${r.pend.length?`<div class="card"><h2>⚠️ Pendências — corrija antes de enviar</h2>${tabelaHTML(['Registro','Problema'], r.pend.slice(0,500))}</div>`:'<div class="alerta-ok">Nenhuma pendência encontrada. 👍</div>'}
+    <div class="card"><h2>Por unidade</h2>${tabelaHTML(['Unidade','CNES','Linhas BPA-C','Procedimentos BPA-C','Linhas BPA-I','Valor estimado'], [...FBF.unidades].map(id=>{ const u=obter('unidades',id)||{}; const cc=r.C.filter(x=>x.unidadeId===id), ii=r.I.filter(x=>x.unidadeId===id); return [u.nome, u.cnes, cc.length, cc.reduce((s,x)=>s+x.qt,0), ii.length, fmtMoeda(cc.reduce((s,x)=>s+fatValorSA(x.pa)*x.qt,0)+ii.reduce((s,x)=>s+fatValorSA(x.pa)*x.qt,0))]; }))}</div>
+    ${r.O.length?`<div class="card"><h2>Fora do BPA (outros instrumentos)</h2>${tabelaHTML(['Instrumento','Procedimento','Quantidade'], r.O.map(o=>[o[0], fmtSigtap(o[1])+' '+((fatProc(o[1])||{}).nome||''), o[2]]))}</div>`:''}`:''}
+  <div class="card"><h2>📥 Importar arquivo de outra unidade</h2><div class="subtitle">Para unidades que usam outro banco: importe o arquivo BPA (texto) gerado lá e ele entra no arquivo consolidado da competência.</div><div class="actions"><input type="file" id="fbiArq" accept=".txt,.bpa,.TXT" class="inp" style="max-width:380px;">${pode('fatBpaFechamento')?`<button class="btn secondary" onclick="fatBpaImportar()">⭱ Importar</button>`:''}</div>
+    ${imps.length?tabelaHTML(['Arquivo','CNES','Linhas','Procedimentos','Importado em',''], imps.map(x=>[esc(x.nomeArquivo), esc(x.cnes), x.linhas, fmtNum(x.qtd), esc(fmtDataHora(x.importadoEm).slice(0,16)), pode('fatBpaFechamento')?`<button class="btn ghost small" onclick="fatBpaImportadoExcluir('${x.id}')">🗑</button>`:'']), {html:true}):''}</div>
+  <div class="card"><h2>📅 Arquivos gerados</h2>${tabelaHTML(['Competência','Arquivo','Unidades','Linhas','Folhas','Controle','Procedimentos','Valor','Gerado em',''], fechs.slice(0,30).map(f=>[fmtMes(f.competencia), esc(f.nomeArquivo||''), esc((f.unidades||[]).map(u=>u.nome).join(', ')), f.linhas, f.folhas, f.controle, fmtNum(f.qtdProcedimentos||0), fmtMoeda(f.valorEstimado||0), esc(fmtDataHora(f.geradoEm).slice(0,16))+' '+esc(f.geradoPor||''), `<button class="btn ghost small" onclick="fatBpaBaixar('${f.id}')" title="Baixar de novo">⭳</button>`]), {html:true})}</div>`;
+};
+async function fatBpaConferir(){ if(!FBF.unidades.size){ showToast('Escolha ao menos uma unidade.','warning'); return; } carregandoMsg(true,'Juntando a produção da competência…'); try{ FBF.res=await fatBpaMontar(FBF.mes, [...FBF.unidades]); } catch(e){ console.error(e); showToast('Falha: '+msgErro(e),'error'); } finally{ carregandoMsg(false); } render(true); }
+async function fatBpaGerar(){
+  if(semPermissao('fatBpaFechamento')) return; if(!FBF.unidades.size){ showToast('Escolha ao menos uma unidade.','warning'); return; }
+  carregandoMsg(true,'Gerando o arquivo do BPA-MAG…');
+  try{
+    const r=await fatBpaMontar(FBF.mes, [...FBF.unidades]); FBF.res=r; carregandoMsg(false);
+    if(r.pend.length && !confirm('Há '+r.pend.length+' pendência(s) que podem virar glosa. Gerar o arquivo assim mesmo?')){ render(true); return; }
+    const imps=FBF.imp?lista('fatBpaImportados').filter(x=>x.competencia===FBF.mes):[]; const txtImp=[]; for(const x of imps) txtImp.push(await blobLer('bpaimp_'+x.id, x.partes, true));
+    const arq=fatBpaArquivo(r, txtImp); if(!arq.linhas){ showToast('Não há produção de BPA nesta competência para as unidades escolhidas.','warning'); return; }
+    const uns=[...FBF.unidades].map(id=>obter('unidades',id)).filter(Boolean); const nome='BPA_'+(uns.length===1?soDigitos(uns[0].cnes):fatCfg().ibgeMunicipio||'MUNICIPIO')+'_'+FBF.mes.replace('-','')+'.TXT';
+    baixarArquivo(arq.texto, nome, 'text/plain');
+    const rec=salvar('fatFechamentos', {competencia:FBF.mes, unidades:uns.map(u=>({id:u.id, nome:u.nome, cnes:u.cnes})), importados:imps.map(x=>x.id), linhas:arq.linhas, folhas:arq.folhas, controle:arq.controle, qtdProcedimentos:r.qtd+imps.reduce((s,x)=>s+(x.qtd||0),0), valorEstimado:r.valor, pendencias:r.pend.length, nomeArquivo:nome, geradoEm:agoraLocal(), geradoPor:usuarioCurto()});
+    try{ const partes=await blobSalvar('bpa_'+rec.id, arq.texto, true); salvar('fatFechamentos', Object.assign({}, rec, {partes})); }catch(e){ console.error(e); showToast('O arquivo foi baixado, mas não pôde ser guardado no sistema: '+msgErro(e),'warning'); }
+    if(FBF.fechar) fatFecharCompetencia(FBF.mes);
+    registrarAcao('Gerou o BPA-MAG de '+fmtMes(FBF.mes)+' ('+arq.linhas+' linhas, controle '+arq.controle+')'); showToast('Arquivo '+nome+' gerado: '+arq.linhas+' linha(s), '+arq.folhas+' folha(s). Importe no BPA-MAG.','success');
+  }catch(e){ console.error(e); showToast('Falha ao gerar: '+msgErro(e),'error'); } finally{ carregandoMsg(false); render(true); }
+}
+async function fatBpaBaixar(id){ const f=obter('fatFechamentos', id); if(!f) return; if(!f.partes){ showToast('Este arquivo não ficou guardado — gere de novo.','warning'); return; } try{ baixarArquivo(await blobLer('bpa_'+id, f.partes, true), f.nomeArquivo||'BPA.TXT', 'text/plain'); registrarAcao('Baixou de novo o BPA-MAG '+(f.nomeArquivo||'')); }catch(e){ showToast('Não foi possível ler o arquivo: '+msgErro(e),'error'); } }
+async function fatBpaImportar(){
+  if(semPermissao('fatBpaFechamento')) return; const f=document.getElementById('fbiArq').files[0]; if(!f){ showToast('Escolha o arquivo.','warning'); return; }
+  const txt=new TextDecoder('windows-1252').decode(await f.arrayBuffer()); const ls=txt.replace(/\r/g,'').split('\n'); const h=ls.find(l=>l.startsWith('01#BPA#'));
+  const det=ls.filter(l=>(l.startsWith('02')&&l.length>=48)||(l.startsWith('03')&&l.length>=338)); if(!h||!det.length){ showToast('Não parece um arquivo texto do BPA (cabeçalho 01#BPA#).','warning'); return; }
+  const comp=h.slice(7,11)+'-'+h.slice(11,13); const cnes=unicos(det.map(l=>l.slice(2,9))); const qtd=det.reduce((s,l)=>s+Number(l.startsWith('02')?l.slice(39,45):l.slice(88,94)),0);
+  const mine=new Set(ativos('unidades').filter(u=>FBF.unidades.has(u.id)).map(u=>soDigitos(u.cnes))); if(cnes.some(c=>mine.has(c)) && !confirm('O arquivo tem produção de CNES que também está marcado aqui ('+cnes.filter(c=>mine.has(c)).join(', ')+'). Isso duplicaria a produção. Importar assim mesmo?')) return;
+  if(comp!==FBF.mes && !confirm('O arquivo é da competência '+fmtMes(comp)+' (a tela está em '+fmtMes(FBF.mes)+'). Importar para '+fmtMes(comp)+'?')) return;
+  const rec=salvar('fatBpaImportados', {competencia:comp, cnes:cnes.join(', '), nomeArquivo:f.name, linhas:det.length, qtd, importadoEm:agoraLocal(), importadoPor:usuarioCurto()});
+  const partes=await blobSalvar('bpaimp_'+rec.id, det.join('\r\n'), true); salvar('fatBpaImportados', Object.assign({}, rec, {partes}));
+  registrarAcao('Importou o BPA de outra unidade ('+f.name+', '+det.length+' linhas)'); FBF.mes=comp; showToast(det.length+' linha(s) importada(s) para '+fmtMes(comp)+'.','success'); render(true);
+}
+function fatBpaImportadoExcluir(id){ const x=obter('fatBpaImportados', id); if(!x||semPermissao('fatBpaFechamento')||!confirm('Tirar o arquivo '+x.nomeArquivo+' do consolidado?')) return; excluir('fatBpaImportados', id); if(x.partes) blobExcluir('bpaimp_'+id, x.partes, true); render(true); }
+
+/* ---------------- SIH: AIH ---------------- */
+const FAT_ESPEC=[['01','01 Cirúrgico'],['02','02 Obstétricos'],['03','03 Clínicos'],['04','04 Crônicos'],['05','05 Psiquiatria'],['06','06 Pneumologia sanitária'],['07','07 Pediátricos'],['08','08 Reabilitação'],['09','09 Leito dia — cirúrgicos'],['10','10 Leito dia — AIDS'],['13','13 Leito dia — geriatria'],['14','14 Leito dia — saúde mental'],['87','87 Saúde mental (clínicos)']];
+function fatAihId(intId){ return 'aih_'+intId; }
+function fatAihPendentes(desde){ return lista('hospInternacoes').filter(i=>i.situacao==='alta' && i.alta && i.alta.data>=desde && (i.tipo||'SUS')==='SUS' && !obter('fatAihs', fatAihId(i.id))); }
+function fatAihPadrao(i){
+  const lau=obter('hospLaudos', i.id)||(i.solicitacaoId?obter('hospLaudos','sol_'+i.solicitacaoId):null)||{}; const al=lau.alta||{}; const cl=obter('hospClinicas', i.clinicaId)||{}; const car=obter('hospCarater', i.caraterId)||{}; const ta=obter('hospTiposAlta', (i.alta||{}).tipoAltaId)||{};
+  const princ=(i.procedimentos||[]).find(x=>x.principal); const ac=i.acidente||{}; const pa=(i.alta||{}).parto||{};
+  const vinc={'AUTÔNOMO':'1','DESEMPREGADO':'2','APOSENTADO':'3','NÃO SEGURADO':'4','EMPREGADO':'5','EMPREGADOR':'6'}[ac.vinculo]||'';
+  return {id:fatAihId(i.id), internacaoId:i.id, pacienteId:i.pacienteId, numeroAIH:soDigitos(i.numeroAIH), apresentacao:mesDe((i.alta||{}).data||hojeISO()), identAih:'01', modalidade:'02', especialidade:cl.codigo||'03', dataEmissao:i.dataEntrada,
+    procSolicitado:i.procSolicitado||'', procRealizado:(princ&&princ.codigo)||i.procSolicitado||'', carater:car.codigo||'02', motivoSaida:ta.codigo||'', medSolicitanteId:i.profSolicitanteId||i.profResponsavelId||'', medResponsavelId:i.profResponsavelId||'', diretorClinicoId:fatCfg().diretorClinicoId||'', autorizadorNome:'', autorizadorDoc:'',
+    cidPrincipal:al.cidPrincipal||lau.cidPrincipal||'', cidsSec:[al.cidSecundario||lau.cidSecundario].filter(Boolean).map(c=>({cid:c, classif:'1'})), justificativaCns:'',
+    procedimentos:(i.procedimentos||[]).filter(x=>!x.principal||fatCfg().incluirPrincipalNaAih).map(x=>({codigo:x.codigo, qtd:x.qtd||1, profissionalId:x.profissionalId||'', cbo:x.cbo||'', equipe:'0', cmpt:/^0802/.test(x.codigo)?mesDe(x.data||i.dataEntrada).replace('-',''):''})),
+    parto:{qtVivos:pa.nascVivos||'', qtMortos:pa.nascMortos||'', qtAlta:pa.saidasAlta||'', qtTransf:pa.saidasTransf||'', qtObito:pa.saidasObito||'', prenatal:pa.sisprenatal||'', qtFilhos:'', grauInstrucao:'', cidIndicacao:'', contracep1:'', contracep2:'', gestRisco:pa.altoRisco?'0':''},
+    utiNeo:{saida:'0', peso:'', meses:''}, acidente:{cnpjEmpregador:soDigitos(ac.cnpjEmpresa), cbor:(obter('hospCBOR', ac.cboId)||{}).codigo||'', cnaer:(obter('hospCNAER', ac.cnaeId)||{}).codigo||'', vinculo:vinc}, situacao:'DIGITADA'};
+}
+const FAI_CAMPOS=[
+  {k:'numeroAIH', r:'Nº da AIH (13 dígitos)', obr:true}, {k:'apresentacao', r:'Apresentação (AAAA-MM)', obr:true, ph:'2026-10'}, {k:'identAih', r:'Identificação', t:'sel', op:[['01','01 — AIH principal'],['05','05 — Longa permanência'],['03','03 — Continuação']], vazio:false}, {k:'modalidade', r:'Modalidade', t:'sel', op:[['02','02 — Hospitalar'],['03','03 — Hospital dia'],['04','04 — Internação domiciliar']], vazio:false},
+  {k:'especialidade', r:'Especialidade do leito', t:'sel', op:FAT_ESPEC, vazio:false, w:2}, {k:'dataEmissao', r:'Data de emissão da AIH', t:'data', obr:true},
+  {k:'procSolicitado', r:'Procedimento solicitado', t:'proc', obr:true, w:2}, {k:'procRealizado', r:'Procedimento realizado (principal)', t:'proc', obr:true, w:2},
+  {k:'carater', r:'Caráter (código SIH)', t:'sel', op:()=>ativos('hospCarater').map(c=>[c.codigo, c.codigo+' — '+c.nome]), obr:true, w:2}, {k:'motivoSaida', r:'Motivo de saída (código SIH)', t:'sel', op:()=>ativos('hospTiposAlta').map(c=>[c.codigo, c.codigo+' — '+c.nome]), obr:true, w:2},
+  {k:'cidPrincipal', r:'CID principal', t:'cid', obr:true, w:2}, {k:'medSolicitanteId', r:'Médico solicitante', t:'ref', tab:'profissionais', obr:true, w:2},
+  {k:'medResponsavelId', r:'Médico responsável', t:'ref', tab:'profissionais', obr:true, w:2}, {k:'diretorClinicoId', r:'Diretor clínico', t:'ref', tab:'profissionais', obr:true, w:2},
+  {k:'autorizadorNome', r:'Médico autorizador (auditor)', w:2, maiusc:true}, {k:'autorizadorDoc', r:'CNS ou CPF do autorizador', obr:true}, {k:'justificativaCns', r:'Justificativa se o paciente não tem CNS', w:4, maiusc:true},
+];
+const FAI_PARTO=[{k:'qtVivos', r:'Nascidos vivos', t:'int'},{k:'qtMortos', r:'Nascidos mortos', t:'int'},{k:'qtAlta', r:'Saídas por alta', t:'int'},{k:'qtTransf', r:'Saídas por transferência', t:'int'},{k:'qtObito', r:'Saídas por óbito', t:'int'},{k:'prenatal', r:'Nº SISPRENATAL (12)'},{k:'qtFilhos', r:'Nº de filhos (laqueadura)', t:'int'},{k:'grauInstrucao', r:'Grau de instrução (laqueadura)', t:'sel', op:[['1','Analfabeto'],['2','1º grau'],['3','2º grau'],['4','3º grau']]},{k:'cidIndicacao', r:'CID de indicação (laqueadura)', t:'cid'},{k:'contracep1', r:'Método contraceptivo 1', t:'sel', op:[['01','LAM'],['02','Ogino-Knaus'],['03','Temp. basal'],['04','Billings'],['05','Cinto térmico'],['06','DIU'],['07','Diafragma'],['08','Preservativo'],['09','Espermicida'],['10','Hormônio oral'],['11','Hormônio injetável'],['12','Coito interrompido']]},{k:'contracep2', r:'Método contraceptivo 2', t:'sel', op:[['01','LAM'],['06','DIU'],['08','Preservativo'],['10','Hormônio oral'],['11','Hormônio injetável']]},{k:'gestRisco', r:'Gestação de alto risco (laqueadura)', t:'sel', op:[['0','Sim'],['1','Não']]}];
+const FAI_UTI=[{k:'saida', r:'Saída de UTI neonatal', t:'sel', op:[['0','Não se aplica'],['1','Alta da UTI'],['2','Óbito na UTI'],['3','Transferência da UTI']], vazio:false},{k:'peso', r:'Peso ao nascer (gramas)', t:'int'},{k:'meses', r:'Meses de gestação', t:'int'}];
+const FAI_ACID=[{k:'cnpjEmpregador', r:'CNPJ do empregador'},{k:'cbor', r:'CBO-R'},{k:'cnaer', r:'CNAE-R (3)'},{k:'vinculo', r:'Vínculo com a Previdência', t:'sel', op:[['1','Autônomo'],['2','Desempregado'],['3','Aposentado'],['4','Não segurado'],['5','Empregado'],['6','Empregador']]}];
+let FAIX=null;
+async function fatAihAbrir(intId){
+  if(semClinico()) return; if(!podeVer('fatAih')){ semPermissao('fatAih'); return; } const i=obter('hospInternacoes', intId); if(!i) return;
+  await garantirTabela(['fatCompatCbo']); const ex=obter('fatAihs', fatAihId(intId)); const a=ex?JSON.parse(JSON.stringify(ex)):fatAihPadrao(i); const ro=!pode('fatAih');
+  FAIX={a, novo:!ex, ro};
+  const p=obter('pacientes', i.pacienteId)||{};
+  FAIX.modal=abrirModal({titulo:'📋 AIH — '+esc(p.nome||'')+' (internação nº '+esc(i.numero||'')+')', tamanho:'m-cheio', corpo:`
+    <div class="small muted mb">${esc(hospLeitoTexto(i))} · ${fmtData(i.dataEntrada)} a ${fmtData((i.alta||{}).data)} (${Math.max(1,hospDias(i))} dia(s)) · ${esc(nomeDe('hospClinicas', i.clinicaId))}${a.situacao!=='DIGITADA'?' · <span class="badge azul">'+esc(a.situacao.toLowerCase())+'</span>':''}</div>
+    <div class="tabs" id="faiAbas">${[['info','📋 Informações da internação'],['procs','🧾 Lançamentos (procedimentos)'],['parto','👶 Parto, laqueadura e UTI neonatal'],['acid','🚑 Acidente de trabalho'],['pac','🧑 Paciente (conferência)'],['critica','✅ Crítica']].map(([k,r],n)=>`<div class="tab ${n?'':'active'}" data-aba="${k}" onclick="fatAihAba('${k}')">${r}</div>`).join('')}</div>
+    <div class="fai-aba" data-aba="info">${formHTML('fai', FAI_CAMPOS, a)}<h3>CID secundários</h3><div id="faiCids"></div></div>
+    <div class="fai-aba" data-aba="procs" style="display:none;"><div class="helpbox">Até 9 linhas (como no SISAIH01). O procedimento principal costuma ir aqui também, com o médico que o realizou, para o componente profissional (SP).</div><div id="faiProcs"></div></div>
+    <div class="fai-aba" data-aba="parto" style="display:none;"><h3>Parto / laqueadura</h3>${formHTML('fap', FAI_PARTO, a.parto||{})}<h3>UTI neonatal</h3>${formHTML('fau', FAI_UTI, a.utiNeo||{})}</div>
+    <div class="fai-aba" data-aba="acid" style="display:none;">${formHTML('faa', FAI_ACID, a.acidente||{})}</div>
+    <div class="fai-aba" data-aba="pac" style="display:none;"><div id="faiPac"></div></div>
+    <div class="fai-aba" data-aba="critica" style="display:none;"><div id="faiCrit"></div></div>`,
+    botoes:[{r:'💾 Salvar AIH', fn:'fatAihSalvar()'}], botoesEsq:[{r:'🖨️ Espelho', fn:`fatAihEspelho('${intId}',false)`},{r:'🖨️ Espelho c/ medicamentos', fn:`fatAihEspelho('${intId}',true)`}]});
+  fatAihCids(); fatAihProcs(); fatAihPacHTML();
+}
+function fatAihAba(k){ fatAihLer(); document.querySelectorAll('#faiAbas .tab').forEach(t=>t.classList.toggle('active', t.dataset.aba===k)); document.querySelectorAll('.fai-aba').forEach(d=>d.style.display=d.dataset.aba===k?'':'none'); if(k==='critica'){ const el=document.getElementById('faiCrit'); const cr=fatAihCritica(FAIX.a); el.innerHTML=cr.erros.length||cr.avisos.length?`${cr.erros.length?`<div class="alerta-erro"><b>Impedem o envio:</b><ul>${cr.erros.map(e=>`<li>${esc(e)}</li>`).join('')}</ul></div>`:''}${cr.avisos.length?`<div class="alerta-aviso"><b>Confira:</b><ul>${cr.avisos.map(e=>`<li>${esc(e)}</li>`).join('')}</ul></div>`:''}`:'<div class="alerta-ok">Nenhum problema encontrado. 👍</div>'; } if(k==='pac') fatAihPacHTML(); }
+function fatAihLer(){ if(!FAIX) return; const a=FAIX.a; if(document.getElementById('fai_numeroAIH')){ const {d}=formLer('fai', FAI_CAMPOS); Object.assign(a, d); } if(document.getElementById('fap_qtVivos')) a.parto=formLer('fap', FAI_PARTO).d; if(document.getElementById('fau_saida')) a.utiNeo=formLer('fau', FAI_UTI).d; if(document.getElementById('faa_vinculo')) a.acidente=formLer('faa', FAI_ACID).d;
+  document.querySelectorAll('[data-faiproc]').forEach(el=>{ const [k,campo]=el.dataset.faiproc.split('|'); const x=a.procedimentos[Number(k)]; if(x) x[campo]=el.value; }); }
+function fatAihCids(){ const el=document.getElementById('faiCids'); if(!el) return; const a=FAIX.a; el.innerHTML=`${tabelaHTML(['CID','Classificação',''], (a.cidsSec||[]).map((c,k)=>[esc(fmtCID(c.cid)+' '+((acharPorChave('cid','codigo',c.cid)||{}).nome||'')), c.classif==='2'?'adquirido na internação':'preexistente', `<button class="btn ghost small" onclick="fatAihLer();FAIX.a.cidsSec.splice(${k},1);fatAihCids()">🗑</button>`]), {html:true})}
+  ${(a.cidsSec||[]).length<9?`<div class="formgrid mt"><div class="field w2"><label>CID secundário</label>${pickerHTML('faiCid2','cid','',{chave:'codigo', ph:'Código ou nome'})}</div><div class="field"><label>Classificação</label><select id="faiCid2c" class="inp"><option value="1">Preexistente</option><option value="2">Adquirido</option></select></div><div class="field" style="align-self:end;"><button class="btn secondary small" onclick="fatAihAddCid()">+ Adicionar</button></div></div>`:''}`; }
+function fatAihAddCid(){ const c=document.getElementById('faiCid2').value; if(!c) return; fatAihLer(); FAIX.a.cidsSec=(FAIX.a.cidsSec||[]).concat([{cid:c, classif:document.getElementById('faiCid2c').value}]); fatAihCids(); }
+function fatAihProcs(){
+  const el=document.getElementById('faiProcs'); if(!el) return; const a=FAIX.a; const profs=opcoesRef('profissionais','');
+  el.innerHTML=`<div class="table-wrap"><table><thead><tr><th>#</th><th>Procedimento</th><th>Qtd</th><th>Profissional</th><th>CBO</th><th>Equipe</th><th>Competência (UTI/acomp.)</th><th>Valor SIGTAP</th><th></th></tr></thead><tbody>${(a.procedimentos||[]).map((x,k)=>{ const pr=fatProc(x.codigo)||{}; const perm=fatCbosPermitidos(x.codigo); const cboRuim=x.cbo&&perm&&perm.size&&!perm.has(x.cbo);
+    return `<tr><td>${k+1}</td><td><b>${esc(fmtSigtap(x.codigo))}</b> <span class="small">${esc((pr.nome||'').slice(0,60))}</span>${a.procRealizado===x.codigo?' <span class="badge azul">principal</span>':''}</td><td><input class="inp" style="width:60px;" data-faiproc="${k}|qtd" value="${esc(x.qtd)}"></td>
+      <td><select class="inp" data-faiproc="${k}|profissionalId" onchange="fatAihProfMudou(${k}, this.value)"><option value="">— (serviço hospitalar)</option>${profs.map(p=>`<option value="${p.id}" ${p.id===x.profissionalId?'selected':''}>${esc(p.nome)}</option>`).join('')}</select></td>
+      <td><input class="inp" style="width:80px;${cboRuim?'border-color:var(--red);':''}" data-faiproc="${k}|cbo" value="${esc(x.cbo||'')}" title="${cboRuim?'CBO não permitido para o procedimento no SIGTAP':''}"></td>
+      <td><select class="inp" data-faiproc="${k}|equipe">${[['0','—'],['1','1º cirurgião'],['2','1º auxiliar'],['3','2º auxiliar'],['4','3º auxiliar'],['5','4º auxiliar'],['6','Anestesista']].map(o=>`<option value="${o[0]}" ${String(x.equipe||'0')===o[0]?'selected':''}>${o[1]}</option>`).join('')}</select></td>
+      <td><input class="inp" style="width:90px;" data-faiproc="${k}|cmpt" placeholder="AAAAMM" value="${esc(x.cmpt||'')}"></td><td class="num">${fmtMoeda(fatValorAIH(x.codigo)*(Number(x.qtd)||1))}</td><td><button class="btn ghost small" onclick="fatAihLer();FAIX.a.procedimentos.splice(${k},1);fatAihProcs()">🗑</button></td></tr>`; }).join('')||'<tr class="empty-row"><td colspan="9">Nenhum procedimento.</td></tr>'}</tbody></table></div>
+    ${(a.procedimentos||[]).length<9?`<div class="formgrid mt"><div class="field w3"><label>Procedimento (SIGTAP)</label>${pickerHTML('faiProc','procedimentos','',{chave:'codigo', ph:'Código ou nome'})}</div><div class="field"><label>Qtd</label><input class="inp" id="faiQtd" value="1"></div><div class="field" style="align-self:end;"><button class="btn secondary small" onclick="fatAihAddProc()">+ Lançar</button></div></div>`:'<div class="small muted mt">Limite de 9 procedimentos por AIH.</div>'}
+    <div class="mt"><b>Valor estimado da AIH (SIGTAP):</b> ${fmtMoeda(fatAihValor(a))}</div>`;
+}
+function fatAihProfMudou(k, pid){ fatAihLer(); const x=FAIX.a.procedimentos[k]; const prof=obter('profissionais', pid)||{}; x.profissionalId=pid; x.cbo=(obter('especialidades', prof.especialidadeId)||{}).cbo||x.cbo||''; fatAihProcs(); }
+function fatAihAddProc(){ const c=document.getElementById('faiProc').value; if(!c) return; fatAihLer(); const i=obter('hospInternacoes', FAIX.a.internacaoId)||{}; const prof=obter('profissionais', i.profResponsavelId)||{}; FAIX.a.procedimentos=(FAIX.a.procedimentos||[]).concat([{codigo:soDigitos(c), qtd:Number(document.getElementById('faiQtd').value)||1, profissionalId:prof.id||'', cbo:(obter('especialidades', prof.especialidadeId)||{}).cbo||'', equipe:'0', cmpt:/^0802/.test(c)?mesDe(i.dataEntrada||hojeISO()).replace('-',''):''}]); fatAihProcs(); }
+function fatAihValor(a){ const ps=a.procedimentos||[]; let v=ps.reduce((s,x)=>s+fatValorAIH(x.codigo)*(Number(x.qtd)||1),0); if(a.procRealizado && !ps.some(x=>x.codigo===a.procRealizado)) v+=fatValorAIH(a.procRealizado); return Math.round(v*100)/100; }
+function fatAihPacHTML(){
+  const el=document.getElementById('faiPac'); if(!el||!FAIX) return; const p=obter('pacientes', FAIX.a.pacienteId)||{}; const pend=fatPacPendencias(p);
+  el.innerHTML=`<div class="kv">${[['Nome',p.nome],['Nascimento',fmtData(p.nascimento)],['Sexo',p.sexo],['Raça/cor',(RACAS.find(r=>r[0]===p.raca)||['',''])[1]],['Mãe',p.mae],['CNS',fmtCNS(p.cns)],['CPF',fmtCPF(p.cpf)],['Endereço',[p.logradouro,p.numero,p.complemento,p.bairro].filter(Boolean).join(', ')],['Município / IBGE',(p.municipio||'')+' / '+(p.ibge||'')],['UF / CEP',(p.uf||'')+' / '+fmtCEP(p.cep)],['Telefone',fmtTel(p.celular||p.telefone)],['Tipo de logradouro (código DNE)',fatTipoLogradouro(p.logradouro)||'não reconhecido']].map(([k,v])=>`<div><span class="k">${k}</span><span class="v">${esc(v||'—')}</span></div>`).join('')}</div>
+    ${pend.length?`<div class="alerta-aviso mt"><b>Faltam no cadastro do paciente:</b> ${esc(pend.join(', '))}</div>`:'<div class="alerta-ok mt">Cadastro do paciente completo para a AIH.</div>'}${pode('pacientes')?`<button class="btn secondary mt" onclick="abrirPaciente('${p.id}',{aoSalvar:()=>fatAihPacHTML()})">✏️ Corrigir o cadastro do paciente</button>`:''}`;
+}
+function fatPacPendencias(p){ const f=[]; if(!p.nome) f.push('nome'); if(!p.nascimento) f.push('nascimento'); if(!['M','F'].includes(p.sexo)) f.push('sexo'); if(!['01','02','03','04','05'].includes(p.raca)) f.push('raça/cor'); if(!p.mae) f.push('nome da mãe'); if(soDigitos(p.cns).length!==15) f.push('CNS'); if(!p.logradouro) f.push('logradouro'); else if(!fatTipoLogradouro(p.logradouro)) f.push('tipo do logradouro (código DNE em Tipos de Logradouro)'); if(!p.bairro) f.push('bairro'); if(!fatIbge6(p.ibge) && !fatCfg().ibgeMunicipio) f.push('código IBGE'); if(!p.uf) f.push('UF'); if(soDigitos(p.celular||p.telefone).length<10) f.push('telefone com DDD'); if(p.raca==='05' && !fatEtnia(p)) f.push('etnia indígena'); return f; }
+function fatAihCritica(a){
+  const erros=[], avisos=[]; const i=obter('hospInternacoes', a.internacaoId)||{}; const p=obter('pacientes', a.pacienteId)||{}; const un=obter('unidades', i.unidadeId||hospUnidade())||{}; const cfg=fatCfg();
+  if(soDigitos(a.numeroAIH).length!==13) erros.push('Nº da AIH precisa ter 13 dígitos'); if(!/^\d{4}-\d{2}$/.test(a.apresentacao||'')) erros.push('Apresentação no formato AAAA-MM');
+  if(!un.cnes) erros.push('Unidade hospitalar sem CNES'); if(!cfg.orgaoEmissorAIH) erros.push('Órgão emissor da AIH (Configurações do Faturamento)'); if(!cfg.ibgeMunicipio) erros.push('IBGE do município (Configurações do Faturamento)');
+  if(i.situacao!=='alta'||!i.alta) erros.push('A internação ainda não teve alta');
+  const pr=fatProc(a.procRealizado); if(!pr) erros.push('Procedimento realizado não está na tabela SIGTAP'); else if((pr.registros||[]).length && !(pr.registros||[]).includes('03')) avisos.push('O procedimento realizado não é "AIH (procedimento principal)" no SIGTAP');
+  if(!fatProc(a.procSolicitado)) erros.push('Procedimento solicitado não está na tabela SIGTAP');
+  if(!/^\d{2}$/.test(a.carater||'')) erros.push('Caráter da internação'); if(!/^\d{2}$/.test(a.motivoSaida||'')) erros.push('Motivo de saída'); if(fatCid4(a.cidPrincipal).length<3) erros.push('CID principal');
+  [['medSolicitanteId','médico solicitante'],['medResponsavelId','médico responsável'],['diretorClinicoId','diretor clínico']].forEach(([k,r])=>{ const d=fatDocProf(obter('profissionais', a[k])); if(d.ind==='0') erros.push('CNS ou CPF do '+r); else if(d.ind==='1') avisos.push('O '+r+' está com CPF (o CNS é o preferido)'); });
+  const da=soDigitos(a.autorizadorDoc); if(da.length!==15 && da.length!==11) erros.push('CNS ou CPF do médico autorizador');
+  if((a.procedimentos||[]).length>9) erros.push('Mais de 9 procedimentos (limite do SISAIH01)');
+  (a.procedimentos||[]).forEach((x,k)=>{ if(!fatProc(x.codigo)) erros.push('Linha '+(k+1)+': procedimento '+x.codigo+' fora do SIGTAP'); if(x.profissionalId){ if(fatDocProf(obter('profissionais', x.profissionalId)).ind==='0') erros.push('Linha '+(k+1)+': profissional sem CNS/CPF'); if(!x.cbo) erros.push('Linha '+(k+1)+': CBO do profissional'); const perm=fatCbosPermitidos(x.codigo); if(x.cbo && perm && perm.size && !perm.has(x.cbo)) avisos.push('Linha '+(k+1)+': CBO '+x.cbo+' não permitido para '+fmtSigtap(x.codigo)+' no SIGTAP'); } });
+  fatPacPendencias(p).forEach(x=>(['nome','nascimento','sexo'].includes(x)?erros:avisos).push('Paciente: '+x));
+  if(soDigitos(p.cns).length!==15 && !a.justificativaCns) avisos.push('Paciente sem CNS: informe a justificativa');
+  if(/^0310/.test(a.procRealizado||'') && !(a.parto||{}).qtVivos && (a.parto||{}).qtVivos!==0) avisos.push('Parto: informe nascidos vivos/mortos e saídas');
+  return {erros, avisos};
+}
+function fatAihSalvar(){
+  if(!FAIX||semPermissao('fatAih')) return; fatAihLer(); const a=FAIX.a; a.numeroAIH=soDigitos(a.numeroAIH); a.autorizadorDoc=soDigitos(a.autorizadorDoc);
+  if(!/^\d{4}-\d{2}$/.test(a.apresentacao||'')){ showToast('Informe a apresentação no formato AAAA-MM.','warning'); return; }
+  const dup=lista('fatAihs').find(x=>x.id!==a.id && a.numeroAIH && x.numeroAIH===a.numeroAIH); if(dup && !confirm('O nº de AIH '+a.numeroAIH+' já está em outra internação. Gravar assim mesmo?')) return;
+  const cr=fatAihCritica(a); a.valorEstimado=fatAihValor(a); a.criticas=cr.erros.length; if(a.situacao==='EXPORTADA'){ a.situacao='DIGITADA'; a.alteradaDepoisDeExportar=true; }
+  salvar('fatAihs', a); const i=obter('hospInternacoes', a.internacaoId); if(i && a.numeroAIH && i.numeroAIH!==a.numeroAIH && !i.encerrada) salvar('hospInternacoes', Object.assign({}, i, {numeroAIH:a.numeroAIH}));
+  registrarAcao('Lançou a AIH '+a.numeroAIH+' de '+nomeDe('pacientes', a.pacienteId)+' (apresentação '+a.apresentacao+')'); fecharModal(FAIX.modal); FAIX=null;
+  showToast(cr.erros.length?'AIH gravada com '+cr.erros.length+' pendência(s) — veja a crítica antes de exportar.':'AIH gravada.', cr.erros.length?'warning':'success'); render(true);
+}
+let FAF={mes:mesDe(hojeISO()), aba:'pendentes'};
+VIEWS.fatAih=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">A AIH tem CID e dados do paciente (sigilo) — seu perfil não tem acesso.</div>';
+  if(typeof HOSP_VIEWS==='undefined') return '<div class="alerta-aviso">Precisa do Módulo Hospital.</div>';
+  const m=FAF.mes; const ints=lista('hospInternacoes').filter(i=>i.situacao==='alta' && i.alta && (i.tipo||'SUS')==='SUS'); let l;
+  if(FAF.aba==='pendentes') l=ints.filter(i=>!obter('fatAihs', fatAihId(i.id)) && i.alta.data>=addDias(hojeISO(),-120));
+  else { l=ints.filter(i=>{ const a=obter('fatAihs', fatAihId(i.id)); return a && a.apresentacao===m && (FAF.aba==='todas' || a.situacao===FAF.aba.toUpperCase()); }); }
+  l=ordenarPor(l, i=>i.alta.data).reverse(); const cnt=n=>lista('fatAihs').filter(a=>a.apresentacao===m && a.situacao===n).length;
+  return `<div class="helpbox">Toda internação <b>SUS com alta</b> no Módulo Hospital aparece aqui para lançar a AIH. Os dados já vêm da internação (laudo, CID, procedimentos, profissionais, parto e acidente de trabalho) — confira, complete o nº da AIH e o autorizador e grave. Depois gere o arquivo em "Gerar Faturamento SISAIH01".</div>
+  <div class="card"><div class="flexrow mb"><div class="actions"><div class="tabs" style="margin:0;">${[['pendentes','⏳ Altas sem AIH ('+fatAihPendentes(addDias(hojeISO(),-120)).length+')'],['digitada','📝 Digitadas ('+cnt('DIGITADA')+')'],['exportada','📦 Exportadas ('+cnt('EXPORTADA')+')'],['todas','Todas']].map(([k,r])=>`<div class="tab ${FAF.aba===k?'active':''}" onclick="FAF.aba='${k}';render()">${r}</div>`).join('')}</div>${FAF.aba!=='pendentes'?`Apresentação ${fatCompSel(m, "FAF.mes=this.value;render()")}`:''}</div></div>
+  ${tabelaHTML(['Internação','Paciente','Entrada','Alta','Clínica','Proc. realizado','Nº AIH','Valor','Situação',''], l.map(i=>{ const a=obter('fatAihs', fatAihId(i.id)); const pr=fatProc(a?a.procRealizado:((i.procedimentos||[]).find(x=>x.principal)||{}).codigo||i.procSolicitado)||{}; return [esc(i.numero), `<b>${esc(nomeDe('pacientes', i.pacienteId))}</b>`, fmtData(i.dataEntrada), fmtData(i.alta.data), esc(nomeDe('hospClinicas', i.clinicaId)), `<span class="small">${esc(fmtSigtap(pr.codigo||''))} ${esc((pr.nome||'').slice(0,45))}</span>`, esc(a?a.numeroAIH:(i.numeroAIH||'')), a?fmtMoeda(a.valorEstimado||0):'', a?(a.situacao==='EXPORTADA'?'<span class="badge ok">exportada</span>':(a.criticas?`<span class="badge ambar">${a.criticas} pendência(s)</span>`:'<span class="badge azul">digitada</span>')):'<span class="badge ruim">sem AIH</span>', `<span class="nowrap">${pode('fatAih')?`<button class="btn small" onclick="fatAihAbrir('${i.id}')">${a?'✏️ AIH':'📋 Lançar AIH'}</button>`:''}${a?`<button class="btn ghost small" onclick="fatAihEspelho('${i.id}',false)" title="Espelho">🖨️</button>`:''}</span>`]; }), {html:true})}</div>`;
+};
+function fatAihEspelho(intId, comMed){
+  if(semClinico()) return; if(FAIX && FAIX.a.internacaoId===intId) fatAihLer(); const i=obter('hospInternacoes', intId); if(!i) return; const a=(FAIX&&FAIX.a.internacaoId===intId)?FAIX.a:(obter('fatAihs', fatAihId(intId))||fatAihPadrao(i)); const p=obter('pacientes', i.pacienteId)||{}; const un=obter('unidades', i.unidadeId||hospUnidade())||{};
+  const kv=(r,v,span)=>`<div ${span?`style="grid-column:span ${span};"`:''}><span>${r}</span>${v||'&nbsp;'}</div>`; const pn=c=>((fatProc(c)||{}).nome||'');
+  const procs=(a.procedimentos||[]).map((x,k)=>[k+1, fmtSigtap(x.codigo), pn(x.codigo), x.qtd, nomeDe('profissionais', x.profissionalId)||'(hospital)', x.cbo||'', fmtMoeda(fatValorAIH(x.codigo)*(Number(x.qtd)||1))]);
+  let med=''; if(comMed && typeof FARMA_VIEWS!=='undefined'){ const ds=lista('farmaDisp').filter(d=>d.internacaoId===intId && d.status!=='cancelada'); const m={}; ds.forEach(d=>(d.itens||[]).forEach(it=>{ m[it.produtoId]=(m[it.produtoId]||0)+Number(it.qtd||0); })); med=`<div class="doc-box"><b>Medicamentos e materiais dispensados para a internação</b>${tabelaHTML(['Produto','Unidade','Quantidade'], Object.entries(m).map(([pid,q])=>[prodNome(pid), prodUn(pid), fmtNum(q)]))}${!ds.length?'<div style="font-size:11px;">Nenhuma dispensação ligada à internação.</div>':''}</div>`; }
+  imprimirHTML(docCabecalho('Espelho da AIH', 'AIH nº '+(a.numeroAIH||'—')+' · apresentação '+(a.apresentacao?fmtMes(a.apresentacao):'—'), i.unidadeId)+
+    `<div class="doc-box"><div class="doc-grid">${kv('Estabelecimento', esc(un.nome||''), 2)}${kv('CNES', esc(un.cnes||''))}${kv('Especialidade', esc((FAT_ESPEC.find(e=>e[0]===a.especialidade)||['',a.especialidade])[1]))}${kv('Paciente', '<b>'+esc(p.nome||'')+'</b>', 2)}${kv('CNS', esc(fmtCNS(p.cns)||''))}${kv('Nascimento / sexo', fmtData(p.nascimento)+' · '+esc(p.sexo||''))}${kv('Internação', fmtData(i.dataEntrada))}${kv('Saída', fmtData((i.alta||{}).data))}${kv('Diárias', Math.max(1,hospDias(i)))}${kv('Caráter / motivo de saída', esc((a.carater||'')+' / '+(a.motivoSaida||'')))}${kv('Proc. solicitado', esc(fmtSigtap(a.procSolicitado)+' '+pn(a.procSolicitado)), 2)}${kv('Proc. realizado', esc(fmtSigtap(a.procRealizado)+' '+pn(a.procRealizado)), 2)}${kv('CID principal', esc(fmtCID(a.cidPrincipal)))}${kv('CID secundários', esc((a.cidsSec||[]).map(c=>fmtCID(c.cid)).join(', ')), 3)}${kv('Médico responsável', esc(nomeDe('profissionais', a.medResponsavelId)), 2)}${kv('Autorizador', esc((a.autorizadorNome||'')+' '+(a.autorizadorDoc||'')), 2)}</div></div>
+    <div class="doc-box"><b>Procedimentos realizados</b>${tabelaHTML(['#','Código','Procedimento','Qtd','Profissional','CBO','Valor (SIGTAP)'], procs, {rodape:['','','','','','Total', fmtMoeda(fatAihValor(a))]})}</div>${med}`);
+  registrarAcao('Imprimiu o espelho da AIH de '+(p.nome||''));
+}
+
+/* ---------------- SISAIH01: arquivo de importação ---------------- */
+function fatAihRegistro(a){
+  const i=obter('hospInternacoes', a.internacaoId)||{}; const p=obter('pacientes', a.pacienteId)||{}; const un=obter('unidades', i.unidadeId||hospUnidade())||{}; const cfg=fatCfg();
+  const doc=pid=>{ const d=fatDocProf(obter('profissionais', pid)); return FX.n(d.ind,1)+FX.n(d.doc,15); }; const da=soDigitos(a.autorizadorDoc);
+  const resp=(i.familiares||[]).find(f=>f.responsavel); const tel=soDigitos(p.celular||p.telefone); const cpf=soDigitos(p.cpf);
+  const tpDoc=p.rg?'2':(soDigitos(p.certidao).length>=30?'6':(p.certidao?'3':'5')); const nuDoc=p.rg?p.rg:(p.certidao||'');
+  let s=FX.z(8)+FX.z(3)+FX.n(a.apresentacao,6)+FX.z(3)+FX.a(cfg.orgaoEmissorAIH,10)+FX.n(un.cnes,7)+FX.n(cfg.ibgeMunicipio,6)+FX.n(a.numeroAIH,13)+FX.n(a.identAih||'01',2)+FX.n(a.especialidade,2)+FX.z(45)
+    +FX.n(a.modalidade||'02',2)+FX.z(3)+FX.z(13)+FX.z(13)+FX.d(a.dataEmissao||i.dataEntrada)+FX.d(i.dataEntrada)+FX.d((i.alta||{}).data)+FX.n(a.procSolicitado,10)+(soDigitos(a.procSolicitado)!==soDigitos(a.procRealizado)?'1':'2')+FX.n(a.procRealizado,10)+FX.n(a.carater,2)+FX.n(a.motivoSaida,2)
+    +doc(a.medSolicitanteId)+doc(a.medResponsavelId)+doc(a.diretorClinicoId)+(da.length===15?'2':da.length===11?'1':'0')+FX.n(da,15)+FX.a(fatCid4(a.cidPrincipal),4)+FX.z(4)
+    +FX.n(cpf.length===11?cpf:'',11)+FX.a(p.nome,70)+FX.d(p.nascimento)+FX.a(['M','F'].includes(p.sexo)?p.sexo:'I',1)+FX.n(['01','02','03','04','05'].includes(p.raca)?p.raca:'99',2)+FX.a(p.mae||'IGNORADA',70)+FX.a(p.respNome||(resp&&resp.nome)||'',70)
+    +FX.n(tpDoc,1)+FX.n(fatEtnia(p)||'0000',4)+FX.z(5)+((cpf.length===11||p.certidao||p.rg)?'N':'S')+'0'+FX.nb(soDigitos(p.cns).length===15?p.cns:'',15)+FX.n(fatNac(p)||cfg.nacionalidadePadrao,3)+FX.n(fatTipoLogradouro(p.logradouro),3)
+    +FX.a(fatSemTipo(p.logradouro),50)+FX.a(p.numero||'SN',7)+FX.a(p.complemento,15)+FX.a(p.bairro,30)+FX.n(fatIbge6(p.ibge)||cfg.ibgeMunicipio,6)+FX.a(p.uf,2)+FX.n(p.cep,8)+FX.a(p.prontuario||p.matricula||'',15)+FX.z(4)+FX.z(4);
+  if(s.length!==663) throw new Error('AIH '+a.numeroAIH+': dados do paciente com '+s.length+' posições (esperado 663)');
+  const ps=(a.procedimentos||[]).slice(0,9);
+  for(let k=0;k<9;k++){ const x=ps[k];
+    if(!x){ s+=FX.z(1)+FX.z(15)+FX.b(6)+FX.z(1)+FX.z(1)+FX.z(14)+FX.z(1)+FX.z(15)+FX.z(10)+FX.z(3)+FX.z(6)+FX.z(3)+FX.z(3); continue; }
+    const prof=obter('profissionais', x.profissionalId); const d=prof?fatDocProf(prof):{ind:'0', doc:''}; const exec=d.ind!=='0'?d:{ind:'5', doc:soDigitos(un.cnes)};
+    s+=FX.n(d.ind,1)+FX.n(d.doc,15)+FX.a(x.cbo||'',6)+FX.n(x.equipe||'0',1)+FX.z(1)+FX.z(14)+FX.n(exec.ind,1)+FX.n(exec.doc,15)+FX.n(x.codigo,10)+FX.n(x.qtd||1,3)+FX.n(x.cmpt||'',6)+FX.z(3)+FX.z(3); }
+  if(s.length!==1374) throw new Error('AIH '+a.numeroAIH+': procedimentos terminam na posição '+s.length+' (esperado 1374)');
+  const pa=a.parto||{}, u=a.utiNeo||{}, ac=a.acidente||{}; const n1=v=>FX.n(Math.min(9,Number(v)||0),1);
+  s+=FX.z(7)+FX.z(2)+FX.n(soDigitos((obter('unidades', i.unidadeId)||{}).ine||''),10)+FX.n(u.saida||'0',1)+FX.n(u.peso||'',4)+FX.n(u.meses||'',1)+FX.n(ac.cnpjEmpregador,14)+FX.n(ac.cbor,6)+FX.n(ac.cnaer,3)+FX.n(ac.vinculo,1)
+    +n1(pa.qtVivos)+n1(pa.qtMortos)+n1(pa.qtAlta)+n1(pa.qtTransf)+n1(pa.qtObito)+FX.z(10)+FX.n(pa.qtFilhos,2)+FX.n(pa.grauInstrucao,1)+FX.a(fatCid4(pa.cidIndicacao),4)+FX.n(pa.contracep1,2)+FX.n(pa.contracep2,2)+FX.n(pa.gestRisco||'1',1)+FX.z(35)
+    +FX.n(pa.prenatal,12)+FX.a(nuDoc,32)+FX.n(tel.slice(0,2),2)+FX.n(tel.slice(2),9)+FX.a(soDigitos(p.cns).length===15?'':a.justificativaCns,50);
+  if(s.length!==1590) throw new Error('AIH '+a.numeroAIH+': diagnósticos começam na posição '+(s.length+1)+' (esperado 1591)');
+  const cs=(a.cidsSec||[]).slice(0,9); for(let k=0;k<9;k++){ const c=cs[k]; s+=c?FX.a(fatCid4(c.cid),4)+FX.n(c.classif||'1',1):FX.b(4)+'0'; }
+  s+=FX.z(165); if(s.length!==1800) throw new Error('AIH '+a.numeroAIH+': registro com '+s.length+' posições (esperado 1800)');
+  return s;
+}
+let FSXF={mes:mesDe(hojeISO())};
+VIEWS.fatSisaih=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">Seu perfil não tem acesso a dados clínicos.</div>';
+  const l=ordenarPor(lista('fatAihs').filter(a=>a.apresentacao===FSXF.mes), a=>a.numeroAIH); const cr=l.map(a=>({a, c:fatAihCritica(a)})); const ok=cr.filter(x=>!x.c.erros.length);
+  const porCnes=agrupar(l, a=>(obter('unidades', (obter('hospInternacoes', a.internacaoId)||{}).unidadeId)||{}).cnes||'?');
+  return `<div class="helpbox">Gera o <b>arquivo de importação do SISAIH01</b> no layout oficial da interface texto do DATASUS (registro de 1.800 posições por AIH). No SISAIH01 use a opção de importar arquivo texto e confira a crítica do próprio programa. Gera um arquivo por hospital (CNES), como o SIS: <b>AIH_CNES_AAAAMM.TXT</b>.</div>
+  <div class="card"><div class="flexrow mb"><div class="actions">Apresentação ${fatCompSel(FSXF.mes, "FSXF.mes=this.value;render()")}<span class="small muted">${l.length} AIH(s) · ${ok.length} sem erro · ${fmtMoeda(l.reduce((s,a)=>s+(a.valorEstimado||0),0))} estimados</span></div>${pode('fatSisaih')&&l.length?`<button class="btn" onclick="fatSisaihGerar()">📦 Gerar arquivo(s) SISAIH01</button>`:''}</div>
+  ${tabelaHTML(['Nº AIH','Paciente','Internação','Saída','Proc. realizado','Valor','Crítica','Situação',''], cr.map(({a,c})=>{ const i=obter('hospInternacoes', a.internacaoId)||{}; return [esc(a.numeroAIH), `<b>${esc(nomeDe('pacientes', a.pacienteId))}</b>`, fmtData(i.dataEntrada), fmtData((i.alta||{}).data), `<span class="small">${esc(fmtSigtap(a.procRealizado))}</span>`, fmtMoeda(a.valorEstimado||0), c.erros.length?`<span class="small" style="color:var(--red);">${esc(c.erros.slice(0,3).join('; '))}${c.erros.length>3?'…':''}</span>`:(c.avisos.length?`<span class="badge ambar" title="${esc(c.avisos.join('; '))}">${c.avisos.length} aviso(s)</span>`:'<span class="badge ok">ok</span>'), a.situacao==='EXPORTADA'?`<span class="badge ok">exportada</span><div class="small muted">${esc(fmtDataHora(a.exportadaEm||'').slice(0,16))}</div>`:'<span class="badge azul">digitada</span>', pode('fatAih')?`<button class="btn ghost small" onclick="fatAihAbrir('${a.internacaoId}')">✏️</button>`:'']; }), {html:true})}
+  ${[...porCnes.keys()].length>1?`<div class="small muted mt">Hospitais: ${[...porCnes.entries()].map(([c,a])=>'CNES '+esc(c)+': '+a.length).join(' · ')}</div>`:''}</div>
+  <div class="card"><h2>Resumo da fatura de AIH — ${fmtMes(FSXF.mes)}</h2>${tabelaHTML(['Especialidade','AIHs','Diárias','Valor estimado (SH+SP)'], Object.entries(contar(l, a=>a.especialidade)).map(([e,n])=>{ const as=l.filter(a=>a.especialidade===e); return [(FAT_ESPEC.find(x=>x[0]===e)||['',e])[1], n, as.reduce((s,a)=>s+Math.max(1,hospDias(obter('hospInternacoes', a.internacaoId)||{dataEntrada:hojeISO()})),0), fmtMoeda(as.reduce((s,a)=>s+(a.valorEstimado||0),0))]; }), {rodape:['Total', l.length, '', fmtMoeda(l.reduce((s,a)=>s+(a.valorEstimado||0),0))]})}</div>`;
+};
+function fatSisaihGerar(){
+  if(semPermissao('fatSisaih')) return; const l=lista('fatAihs').filter(a=>a.apresentacao===FSXF.mes); const comErro=l.filter(a=>fatAihCritica(a).erros.length);
+  let usar=l; if(comErro.length){ const r=confirm(comErro.length+' AIH(s) têm erros que o SISAIH01 vai recusar. OK = gerar só as '+(l.length-comErro.length)+' sem erro · Cancelar = não gerar.'); if(!r) return; usar=l.filter(a=>!comErro.includes(a)); }
+  if(!usar.length){ showToast('Nenhuma AIH sem erro para gerar.','warning'); return; }
+  try{ const porCnes=agrupar(usar, a=>soDigitos((obter('unidades', (obter('hospInternacoes', a.internacaoId)||{}).unidadeId||hospUnidade())||{}).cnes)||'0000000');
+    porCnes.forEach((as, cnes)=>{ const txt=as.map(fatAihRegistro).join('\r\n')+'\r\n'; const nome='AIH_'+cnes+'_'+FSXF.mes.replace('-','')+'.TXT'; baixarArquivo(txt, nome, 'text/plain');
+      as.forEach(a=>salvar('fatAihs', Object.assign({}, a, {situacao:'EXPORTADA', exportadaEm:agoraLocal(), exportadaPor:usuarioCurto(), arquivo:nome, alteradaDepoisDeExportar:false}))); registrarAcao('Gerou o arquivo SISAIH01 '+nome+' ('+as.length+' AIH)'); });
+    showToast(usar.length+' AIH(s) exportada(s). Importe no SISAIH01.','success'); render(true); }
+  catch(e){ console.error(e); showToast('Falha: '+msgErro(e),'error'); }
+}
+
+/* ---------------- CIH (internações não SUS) ---------------- */
+let FCIF={mes:mesDe(hojeISO())};
+VIEWS.fatCih=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">Seu perfil não tem acesso a dados clínicos.</div>';
+  if(typeof HOSP_VIEWS==='undefined') return '<div class="alerta-aviso">Precisa do Módulo Hospital.</div>';
+  const ints=ordenarPor(lista('hospInternacoes').filter(i=>i.situacao==='alta' && i.alta && i.tipo && i.tipo!=='SUS' && mesDe(i.alta.data)===FCIF.mes), i=>i.alta.data);
+  return `<div class="helpbox">A <b>CIH</b> informa ao DATASUS as internações que <b>não</b> são pagas pelo SUS (convênio e particular). Confira cada uma e exporte a planilha para digitar/importar no programa CIH01.</div>
+  <div class="card"><div class="flexrow mb"><div class="actions">Alta em ${fatCompSel(FCIF.mes, "FCIF.mes=this.value;render()")}<span class="small muted">${ints.length} internação(ões)</span></div><button class="btn secondary" onclick="fatCihExcel()">⭳ Excel para o CIH01</button></div>
+  ${tabelaHTML(['Internação','Paciente','Convênio','Entrada','Saída','Proc. realizado','CID','UTI (dias)','Situação',''], ints.map(i=>{ const c=obter('fatCih','cih_'+i.id)||fatCihPadrao(i); return [esc(i.numero), `<b>${esc(nomeDe('pacientes', i.pacienteId))}</b>`, esc(nomeDe('convenios', i.convenioId)||i.tipo), fmtData(i.dataEntrada), fmtData(i.alta.data), esc(fmtSigtap(c.procRealizado||'')), esc(fmtCID(c.cidPrincipal||'')), c.utiDias||'', obter('fatCih','cih_'+i.id)?'<span class="badge ok">conferida</span>':'<span class="badge ambar">a conferir</span>', pode('fatCih')?`<button class="btn small" onclick="fatCihAbrir('${i.id}')">✏️</button>`:'']; }), {html:true})}</div>`;
+};
+function fatCihPadrao(i){ const lau=obter('hospLaudos', i.id)||{}; const al=lau.alta||{}; const ta=obter('hospTiposAlta', (i.alta||{}).tipoAltaId)||{}; return {id:'cih_'+i.id, internacaoId:i.id, pacienteId:i.pacienteId, apresentacao:mesDe(i.alta.data), procRealizado:((i.procedimentos||[]).find(x=>x.principal)||{}).codigo||i.procSolicitado||'', cidPrincipal:al.cidPrincipal||lau.cidPrincipal||'', cidSecundario:al.cidSecundario||lau.cidSecundario||'', utiDias:'', obito:ta.grupo==='obito', motivoSaida:ta.codigo||'', convenio:i.tipo==='PARTICULAR'?'PARTICULAR':nomeDe('convenios', i.convenioId)}; }
+const FCIH_CAMPOS=[{k:'apresentacao', r:'Apresentação (AAAA-MM)', obr:true},{k:'procRealizado', r:'Procedimento realizado (SIGTAP)', t:'proc', w:3, obr:true},{k:'cidPrincipal', r:'CID principal', t:'cid', w:2, obr:true},{k:'cidSecundario', r:'CID secundário', t:'cid', w:2},{k:'utiDias', r:'Dias de UTI', t:'int'},{k:'motivoSaida', r:'Motivo de saída (código)'},{k:'obito', r:'Óbito', t:'sim'}];
+function fatCihAbrir(intId){ const i=obter('hospInternacoes', intId); if(!i||semPermissao('fatCih')) return; const c=obter('fatCih','cih_'+intId)||fatCihPadrao(i); abrirModal({titulo:'🧾 CIH — '+esc(nomeDe('pacientes', i.pacienteId)), corpo:formHTML('fch', FCIH_CAMPOS, c), botoes:[{r:'💾 Salvar', fn:`fatCihSalvar('${intId}')`}]}); }
+function fatCihSalvar(intId){ const i=obter('hospInternacoes', intId); const {d, erros}=formLer('fch', FCIH_CAMPOS); if(mostrarErros(erros)) return; salvar('fatCih', Object.assign(fatCihPadrao(i), obter('fatCih','cih_'+intId)||{}, d)); registrarAcao('Conferiu a CIH da internação nº '+i.numero); fecharModalTopo(); render(true); }
+function fatCihExcel(){ const ints=lista('hospInternacoes').filter(i=>i.situacao==='alta' && i.alta && i.tipo && i.tipo!=='SUS' && mesDe(i.alta.data)===FCIF.mes); const un=obter('unidades', hospUnidade())||{};
+  exportarExcel('CIH '+FCIF.mes, [{nome:'CIH', titulo:'CIH — internações não SUS — alta em '+fmtMes(FCIF.mes), cab:['CNES','Apresentação','Internação','Nome','CNS','Nascimento','Sexo','IBGE residência','Data internação','Data saída','Procedimento realizado','CID principal','CID secundário','Dias UTI','Motivo saída','Óbito','Convênio'], linhas:ints.map(i=>{ const c=obter('fatCih','cih_'+i.id)||fatCihPadrao(i); const p=obter('pacientes', i.pacienteId)||{}; return [un.cnes||'', c.apresentacao, i.numero, p.nome, soDigitos(p.cns), fmtData(p.nascimento), p.sexo, fatIbge6(p.ibge)||fatCfg().ibgeMunicipio, fmtData(i.dataEntrada), fmtData(i.alta.data), c.procRealizado, fatCid4(c.cidPrincipal), fatCid4(c.cidSecundario), c.utiDias, c.motivoSaida, c.obito?'SIM':'NÃO', c.convenio]; })}]); registrarAcao('Exportou a CIH de '+fmtMes(FCIF.mes)); }
+
+/* ============================================================
+   MÓDULO FATURAMENTO — parte 3: contas de convênio/particular e
+   guias TISS, consórcio (recibos por município), relatórios,
+   ligações com os outros módulos e demonstração.
+   ============================================================ */
+const FCT_GRUPOS=[['PROCEDIMENTO','Procedimentos e honorários'],['OPM','Órteses, próteses e materiais especiais (OPM)'],['DIÁRIA','Diárias'],['TAXA','Taxas'],['GASES MEDICINAIS','Gases medicinais'],['MEDICAMENTO','Medicamentos'],['MATERIAL','Materiais'],['ALUGUEL','Aluguéis'],['OUTROS','Outros']];
+const FCT_TISS_CD={'GASES MEDICINAIS':'01','MEDICAMENTO':'02','MATERIAL':'03','DIÁRIA':'05','ALUGUEL':'06','TAXA':'07','OPM':'08'};
+const FCT_GRAUS=[['00','Cirurgião / executante',100],['01','1º auxiliar',30],['02','2º auxiliar',20],['03','3º auxiliar',10],['04','4º auxiliar',10],['06','Anestesista',100],['12','Clínico',100]];
+function fatContaTotal(c){ return Math.round((c.itens||[]).reduce((s,x)=>s+(Number(x.total)||0),0)*100)/100; }
+function fatContaTotais(c){ const t={}; (c.itens||[]).forEach(x=>{ t[x.grupo]=(t[x.grupo]||0)+(Number(x.total)||0); }); return t; }
+function fatContasPendentes(){ return typeof HOSP_VIEWS==='undefined'?[]:lista('hospInternacoes').filter(i=>i.tipo && i.tipo!=='SUS' && i.situacao!=='cancelada' && !lista('fatContas').some(c=>c.internacaoId===i.id)); }
+function fatValorProcConv(pc, conv){ if(!pc) return 0; if(Number(pc.valor)>0) return Number(pc.valor); const co=obter('fatCoeficientes', (conv||{}).coeficienteId)||ativos('fatCoeficientes')[0]||{};  /* particular: primeiro coeficiente ativo */ return Math.round(((Number(pc.ch)||0)*(Number(co.valorCH)||0)+(Number(pc.uco)||0)*(Number(co.valorUCO)||0)+(Number(pc.filme)||0)*(Number(co.valorFilme)||0))*100)/100; }
+let FCTF={aba:'abertas', busca:''};
+VIEWS.fatContas=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">A conta tem diagnóstico e procedimentos do paciente — seu perfil não tem acesso.</div>';
+  let l=lista('fatContas'); if(FCTF.aba==='abertas') l=l.filter(c=>c.situacao==='ABERTA'); else if(FCTF.aba==='fechadas') l=l.filter(c=>c.situacao!=='ABERTA');
+  if(FCTF.busca){ const t=norm(FCTF.busca); l=l.filter(c=>norm(nomeDe('pacientes',c.pacienteId)+' '+c.numero+' '+nomeDe('convenios',c.convenioId)).includes(t)); }
+  l=ordenarPor(l, c=>c.dataInicio||'').reverse(); const pend=fatContasPendentes();
+  return `<div class="helpbox">Conta de cada internação ou atendimento de <b>convênio ou particular</b> (como o "Lançar Fatura Convênio" do SIS). A internação não SUS do Módulo Hospital já aparece abaixo para abrir a conta; os medicamentos que a farmácia entregou e as diárias entram com um clique. O valor da conta atualiza a cada lançamento.</div>
+  ${pend.length&&pode('fatContas')?`<div class="card" style="border-left:4px solid var(--amber);"><h2>🏥 Internações de convênio/particular sem conta (${pend.length})</h2>${tabelaHTML(['Internação','Paciente','Convênio','Entrada','Situação',''], pend.map(i=>[esc(i.numero), `<b>${esc(nomeDe('pacientes', i.pacienteId))}</b>`, esc(i.tipo==='PARTICULAR'?'PARTICULAR':nomeDe('convenios', i.convenioId)), fmtData(i.dataEntrada), i.situacao==='alta'?'alta '+fmtData(i.alta.data):'internado', `<button class="btn small" onclick="fatContaDaInternacao('${i.id}')">🧮 Abrir conta</button>`]), {html:true})}</div>`:''}
+  <div class="card"><div class="flexrow mb"><div class="actions"><div class="tabs" style="margin:0;">${[['abertas','🧮 Abertas'],['fechadas','✅ Fechadas / enviadas'],['todas','Todas']].map(([k,r])=>`<div class="tab ${FCTF.aba===k?'active':''}" onclick="FCTF.aba='${k}';render()">${r}</div>`).join('')}</div><input class="inp" style="max-width:240px;" placeholder="🔎 paciente, nº ou convênio" value="${esc(FCTF.busca)}" oninput="FCTF.busca=this.value;debRender()"></div>${pode('fatContas')?`<button class="btn" onclick="fatContaNova()">+ Conta ambulatorial / avulsa</button>`:''}</div>
+  ${tabelaHTML(['Nº','Paciente','Convênio','Tipo','Período','Itens','Total','Situação',''], l.map(c=>[esc(c.numero), `<b>${esc(nomeDe('pacientes', c.pacienteId))}</b>`, esc(c.particular?'PARTICULAR':nomeDe('convenios', c.convenioId)), esc(c.tipo||''), fmtData(c.dataInicio)+(c.dataFim?' a '+fmtData(c.dataFim):''), (c.itens||[]).length, fmtMoeda(c.total||0), `<span class="badge ${c.situacao==='ABERTA'?'ambar':c.situacao==='PAGA'?'ok':c.situacao==='GLOSADA'?'ruim':'azul'}">${esc((c.situacao||'').toLowerCase())}</span>`, `<span class="nowrap"><button class="btn small" onclick="fatContaAbrir('${c.id}')">✏️</button><button class="btn ghost small" onclick="fatGuiaImprimir('${c.id}','espelho')" title="Espelho">🖨️</button></span>`]), {html:true})}</div>`;
+};
+async function fatContaDaInternacao(intId){
+  const i=obter('hospInternacoes', intId); if(!i||semPermissao('fatContas')) return; const ja=lista('fatContas').find(c=>c.internacaoId===intId); if(ja) return fatContaAbrir(ja.id);
+  const lau=obter('hospLaudos', intId)||{}; const tp=(obter('hospClinicas', i.clinicaId)||{}).codigo; const n=await hospNumero('fatconta', hojeISO());
+  const c=salvar('fatContas', {numero:n, tipo:'INTERNAÇÃO', internacaoId:intId, pacienteId:i.pacienteId, convenioId:i.convenioId||'', particular:i.tipo==='PARTICULAR', dataInicio:i.dataEntrada, dataFim:(i.alta||{}).data||'', apresentacao:mesDe((i.alta||{}).data||hojeISO()), carater:(obter('hospCarater', i.caraterId)||{}).codigo==='01'?'ELETIVA':'URGÊNCIA / EMERGÊNCIA', tipoInternacao:({'01':'CIRÚRGICA','02':'OBSTÉTRICA','07':'PEDIÁTRICA','05':'PSIQUIÁTRICA'})[tp]||'CLÍNICA', regime:'HOSPITALAR', cid:(lau.alta||{}).cidPrincipal||lau.cidPrincipal||'', hipotese:lau.diagInicial||'', profissionalId:i.profResponsavelId||'', itens:[], total:0, situacao:'ABERTA'});
+  registrarAcao('Abriu a conta nº '+n+' da internação nº '+i.numero); fatContaAbrir(c.id);
+}
+function fatContaNova(){
+  if(semPermissao('fatContas')) return;
+  abrirModal({titulo:'🧮 Nova conta ambulatorial / avulsa', corpo:`<div class="field mb"><label>Paciente</label>${pickerPacienteHTML('fcnPac','',{})}</div><div class="formgrid"><div class="field w2"><label>Convênio</label><select id="fcnConv" class="inp"><option value="">PARTICULAR</option>${opcoesRef('convenios','').map(c=>`<option value="${c.id}">${esc(c.nome)}</option>`).join('')}</select></div><div class="field"><label>Data</label><input type="date" class="inp" id="fcnData" value="${hojeISO()}"></div></div>`, botoes:[{r:'Criar', fn:'fatContaNovaOk()'}]});
+}
+async function fatContaNovaOk(){ const pid=document.getElementById('fcnPac').value; if(!pid){ showToast('Escolha o paciente.','warning'); return; } const conv=document.getElementById('fcnConv').value; const d=document.getElementById('fcnData').value||hojeISO();
+  const c=salvar('fatContas', {numero:await hospNumero('fatconta', d), tipo:'AMBULATORIAL', pacienteId:pid, convenioId:conv, particular:!conv, dataInicio:d, dataFim:d, apresentacao:mesDe(d), carater:'ELETIVA', itens:[], total:0, situacao:'ABERTA'}); fecharModalTopo(); fatContaAbrir(c.id); }
+const FCT_CAMPOS=[{k:'convenioId', r:'Convênio (em branco = particular)', t:'ref', tab:'convenios', w:2},{k:'planoId', r:'Plano', t:'ref', tab:'fatPlanos', w:2},{k:'carteira', r:'Nº da carteira'},{k:'validadeCarteira', r:'Validade da carteira', t:'data'},{k:'guiaOperadora', r:'Nº da guia na operadora'},{k:'senha', r:'Senha de autorização'},
+  {k:'dataInicio', r:'Início', t:'data', obr:true},{k:'dataFim', r:'Fim', t:'data'},{k:'apresentacao', r:'Mês de apresentação (AAAA-MM)'},{k:'carater', r:'Caráter', t:'sel', op:['ELETIVA','URGÊNCIA / EMERGÊNCIA']},{k:'tipoInternacao', r:'Tipo de internação', t:'sel', op:['CLÍNICA','CIRÚRGICA','OBSTÉTRICA','PEDIÁTRICA','PSIQUIÁTRICA']},{k:'regime', r:'Regime', t:'sel', op:['HOSPITALAR','HOSPITAL-DIA','DOMICILIAR']},
+  {k:'profissionalId', r:'Médico solicitante / responsável', t:'ref', tab:'profissionais', w:2},{k:'cid', r:'CID', t:'cid', w:2},{k:'hipotese', r:'Hipótese diagnóstica', w:4, maiusc:true},{k:'saidaMotivo', r:'Motivo de encerramento / saída', w:2, maiusc:true},{k:'obs', r:'Observações', w:2}];
+let FCX=null;
+async function fatContaAbrir(id){
+  if(semClinico()) return; const c0=obter('fatContas', id); if(!c0) return; await garantirTabela(['fatProcConv','fatEquiv']);
+  FCX={c:JSON.parse(JSON.stringify(c0))}; const p=obter('pacientes', c0.pacienteId)||{};
+  FCX.modal=abrirModal({titulo:'🧮 Conta nº '+esc(c0.numero)+' — '+esc(p.nome||''), tamanho:'m-cheio', corpo:'<div id="fctCorpo"></div>', botoes:[{r:'💾 Salvar', fn:'fatContaSalvar(false)'}], botoesEsq:[{r:'🖨️ Guias e espelho', fn:`fatContaSalvar(true);fatGuiasConta('${id}')`}]});
+  fatContaRender();
+}
+function fatContaLer(){ if(!FCX||!document.getElementById('fct_dataInicio')) return; const {d}=formLer('fct', FCT_CAMPOS); Object.assign(FCX.c, d); FCX.c.particular=!FCX.c.convenioId; }
+function fatContaRender(){
+  const el=document.getElementById('fctCorpo'); if(!el||!FCX) return; const c=FCX.c; const ed=pode('fatContas') && c.situacao==='ABERTA'; const conv=obter('convenios', c.convenioId)||{}; const tot=fatContaTotais(c); c.total=fatContaTotal(c);
+  const procs=ativos('fatProcConv').filter(x=>!conv.tabelaId||x.tabelaId===conv.tabelaId);
+  el.innerHTML=`${c.situacao!=='ABERTA'?`<div class="alerta-aviso">Conta ${esc(c.situacao.toLowerCase())} — para alterar, reabra.</div>`:''}${formHTML('fct', FCT_CAMPOS, c)}
+    <h3>Lançamentos</h3><div class="grid cols-4 mb">${FCT_GRUPOS.filter(g=>tot[g[0]]).map(g=>`<div class="stat"><div class="label">${esc(g[1])}</div><div class="value" style="font-size:17px;">${fmtMoeda(tot[g[0]])}</div></div>`).join('')}<div class="stat ok"><div class="label">Total da conta</div><div class="value">${fmtMoeda(c.total)}</div></div></div>
+    ${tabelaHTML(['Grupo','Data','Código','Descrição','Profissional / grau','Qtd','Unitário','Total',''], (c.itens||[]).map((x,k)=>[esc(x.grupo), fmtData(x.data), esc(x.codigo||''), esc(x.descricao||''), esc([nomeDe('profissionais', x.profissionalId), (FCT_GRAUS.find(g=>g[0]===x.grau)||[])[1]].filter(Boolean).join(' · ')), fmtNum(x.qtd), fmtMoeda(x.valorUnit), fmtMoeda(x.total), ed?`<button class="btn ghost small" onclick="fatContaLer();FCX.c.itens.splice(${k},1);fatContaRender()">🗑</button>`:'']), {html:true})}
+    ${ed?`<h3>+ Lançar</h3><div class="formgrid"><div class="field"><label>Grupo</label><select id="fciGrupo" class="inp" onchange="fatContaItemGrupo()">${FCT_GRUPOS.map(g=>`<option value="${g[0]}">${esc(g[1])}</option>`).join('')}</select></div>
+      <div class="field w3" id="fciProcBox"><label>Procedimento (tabela ${esc(nomeDe('fatTabelas', conv.tabelaId)||'de convênio')})</label><select id="fciProc" class="inp" onchange="fatContaItemProc()"><option value="">— digite abaixo ou escolha —</option>${procs.slice(0,800).map(x=>`<option value="${x.id}">${esc((x.codigo||'')+' — '+x.nome)}</option>`).join('')}</select></div>
+      <div class="field"><label>Código</label><input class="inp" id="fciCod"></div><div class="field w3"><label>Descrição</label><input class="inp" id="fciDesc" style="text-transform:uppercase;"></div>
+      <div class="field"><label>Data</label><input type="date" class="inp" id="fciData" value="${c.dataInicio||hojeISO()}"></div><div class="field"><label>Qtd</label><input class="inp" id="fciQtd" value="1"></div><div class="field"><label>Valor unitário (R$)</label><input class="inp" id="fciVal"></div>
+      <div class="field w2"><label>Profissional</label><select id="fciProf" class="inp"><option value="">—</option>${opcoesRef('profissionais','').map(p=>`<option value="${p.id}">${esc(p.nome)}</option>`).join('')}</select></div><div class="field"><label>Grau de participação</label><select id="fciGrau" class="inp" onchange="fatContaItemProc()"><option value="">—</option>${FCT_GRAUS.map(g=>`<option value="${g[0]}">${esc(g[1])} (${g[2]}%)</option>`).join('')}</select></div></div>
+      <div class="actions mt"><button class="btn secondary" onclick="fatContaAddItem()">+ Lançar item</button>${c.internacaoId&&typeof FARMA_VIEWS!=='undefined'?`<button class="btn secondary" onclick="fatContaFarmacia()">💊 Trazer o que a farmácia entregou</button>`:''}${c.internacaoId?`<button class="btn secondary" onclick="fatContaDiarias()">🛏️ Calcular diárias</button>`:''}</div>`:''}
+    <h3>Situação</h3><div class="actions">${c.situacao==='ABERTA'?(pode('fatContas')?`<button class="btn" onclick="fatContaSituacao('FECHADA')">✅ Fechar a conta</button>`:''):`${pode('fatContas')?`<button class="btn secondary" onclick="fatContaSituacao('ABERTA')">↩ Reabrir</button>${c.situacao==='FECHADA'?`<button class="btn secondary" onclick="fatContaSituacao('ENVIADA')">📤 Marcar como enviada</button>`:''}${['FECHADA','ENVIADA'].includes(c.situacao)?`<button class="btn secondary" onclick="fatContaPagamento()">💰 Registrar pagamento / glosa</button>`:''}`:''}`}${c.valorPago!==undefined&&c.valorPago!==''?`<span class="small">Pago: <b>${fmtMoeda(c.valorPago)}</b>${c.valorGlosado?' · glosado: <b style="color:var(--red);">'+fmtMoeda(c.valorGlosado)+'</b> '+esc(c.glosaMotivo||''):''}</span>`:''}</div>`;
+  if(!ed) setTimeout(()=>document.querySelectorAll('#fctCorpo input,#fctCorpo select').forEach(x=>{ if(x.closest('.formgrid')&&x.id&&x.id.startsWith('fct_')) x.disabled=true; }), 20);
+  fatContaItemGrupo();
+}
+function fatContaItemGrupo(){ const g=(document.getElementById('fciGrupo')||{}).value; const b=document.getElementById('fciProcBox'); if(b) b.style.display=g==='PROCEDIMENTO'?'':'none'; }
+function fatContaItemProc(){ const pc=obter('fatProcConv', (document.getElementById('fciProc')||{}).value); if(!pc) return; const conv=obter('convenios', FCX.c.convenioId)||{}; const grau=FCT_GRAUS.find(g=>g[0]===document.getElementById('fciGrau').value); let v=fatValorProcConv(pc, conv); if(grau && grau[0]==='06' && pc.porteId){ const po=obter('fatPortes', pc.porteId)||{}; v=Number(po.valor)||((Number(po.ch)||0)*Number((obter('fatCoeficientes', conv.coeficienteId)||ativos('fatCoeficientes')[0]||{}).valorCH||0)); } else if(grau) v=v*grau[2]/100;
+  document.getElementById('fciCod').value=pc.codigo||''; document.getElementById('fciDesc').value=pc.nome||''; document.getElementById('fciVal').value=String(Math.round(v*100)/100).replace('.',','); }
+function fatContaAddItem(){ fatContaLer(); const g=document.getElementById('fciGrupo').value; const desc=document.getElementById('fciDesc').value.trim().toUpperCase(); const q=numBR(document.getElementById('fciQtd').value)||1; const v=numBR(document.getElementById('fciVal').value)||0; if(!desc){ showToast('Informe a descrição.','warning'); return; }
+  FCX.c.itens=(FCX.c.itens||[]).concat([{id:uid(), grupo:g, data:document.getElementById('fciData').value||hojeISO(), codigo:document.getElementById('fciCod').value.trim(), tabela:g==='PROCEDIMENTO'?((obter('fatTabelas', (obter('convenios', FCX.c.convenioId)||{}).tabelaId)||{}).codigoTiss||'22'):(FCT_TISS_CD[g]?({'02':'20','03':'19','08':'19','01':'18','05':'18','06':'18','07':'18'})[FCT_TISS_CD[g]]:'00'), descricao:desc, qtd:q, valorUnit:v, total:Math.round(q*v*100)/100, profissionalId:document.getElementById('fciProf').value, grau:document.getElementById('fciGrau').value, origem:'manual'}]); fatContaRender(); }
+function fatContaFarmacia(){
+  fatContaLer(); const c=FCX.c; const conv=obter('convenios', c.convenioId)||{}; const acr=1+(Number(conv.acrescimoMed)||0)/100; const ja=new Set((c.itens||[]).filter(x=>x.origem==='farmacia').map(x=>x.dispItem));
+  const ds=lista('farmaDisp').filter(d=>d.internacaoId===c.internacaoId && d.status!=='cancelada'); let n=0, sem=0;
+  ds.forEach(d=>(d.itens||[]).forEach((it,k)=>{ const chave=d.id+'|'+k; if(ja.has(chave)) return; const p=obter('farmaProdutos', it.produtoId)||{}; const e=obter('fatEquiv','e'+it.produtoId)||{}; const unit=Math.round((Number(e.precoVenda)||Number(p.precoReferencia)*acr||0)*100)/100; if(!unit) sem++;
+    c.itens.push({id:uid(), grupo:p.tipo==='MEDICAMENTO'?'MEDICAMENTO':'MATERIAL', data:d.data, codigo:e.codigoTuss||p.codigo||'', tabela:e.tabelaTiss||(p.tipo==='MEDICAMENTO'?'20':'19'), descricao:p.nome||'', qtd:Number(it.qtd)||0, valorUnit:unit, total:Math.round((Number(it.qtd)||0)*unit*100)/100, origem:'farmacia', dispItem:chave}); n++; }));
+  fatContaRender(); showToast(n?n+' item(ns) da farmácia lançado(s)'+(sem?' — '+sem+' sem preço (preencha em Medicamentos e Materiais × TISS)':'')+'.':'Nada novo da farmácia para esta internação.', n?'success':'info');
+}
+function fatContaDiarias(){
+  fatContaLer(); const c=FCX.c; const i=obter('hospInternacoes', c.internacaoId); if(!i) return; const l=obter('hospLeitos', i.leitoId); const q=hospQuartoDe(l); const cat=obter('hospCategorias', q.categoriaId)||{}; const dias=Math.max(1, hospDias(i));
+  c.itens=(c.itens||[]).filter(x=>x.origem!=='diaria'); c.itens.push({id:uid(), grupo:'DIÁRIA', data:i.dataEntrada, codigo:'', tabela:'18', descricao:'DIÁRIA '+(cat.nome||'ENFERMARIA'), qtd:dias, valorUnit:Number(cat.valorDiaria)||0, total:Math.round(dias*(Number(cat.valorDiaria)||0)*100)/100, origem:'diaria'});
+  fatContaRender(); if(!cat.valorDiaria) showToast('A categoria da acomodação está sem o valor da diária (Hospital → Tabelas → Categorias).','warning');
+}
+function fatContaSalvar(silencioso){ if(!FCX) return; fatContaLer(); const c=FCX.c; c.total=fatContaTotal(c); if(!pode('fatContas')) return; salvar('fatContas', c); if(!silencioso){ registrarAcao('Alterou a conta nº '+c.numero+' ('+fmtMoeda(c.total)+')'); fecharModal(FCX.modal); FCX=null; showToast('Conta salva.','success'); render(true); } }
+function fatContaSituacao(s){ fatContaLer(); FCX.c.situacao=s; FCX.c['em'+s]=agoraLocal(); fatContaSalvar(true); registrarAcao('Conta nº '+FCX.c.numero+': '+s.toLowerCase()); fatContaRender(); }
+function fatContaPagamento(){ const c=FCX.c; const pago=prompt('Valor pago pelo convênio (R$):', String(c.valorPago??c.total).replace('.',',')); if(pago===null) return; const v=numBR(pago); const glosa=Math.max(0, Math.round((c.total-v)*100)/100); let mot=''; if(glosa>0) mot=prompt('Motivo da glosa de '+fmtMoeda(glosa)+':','')||''; Object.assign(c, {valorPago:v, valorGlosado:glosa, glosaMotivo:mot, situacao:glosa>0?'GLOSADA':'PAGA', pagaEm:agoraLocal()}); fatContaSalvar(true); fatContaRender(); }
+/* ---------------- Guias TISS (impressas) ---------------- */
+let FGF={mes:mesDe(hojeISO()), conv:''};
+VIEWS.fatGuias=()=>{
+  if(!podeClinico()) return '<div class="alerta-aviso">Seu perfil não tem acesso a dados clínicos.</div>';
+  const l=ordenarPor(lista('fatContas').filter(c=>(c.apresentacao||mesDe(c.dataInicio||hojeISO()))===FGF.mes && (!FGF.conv || c.convenioId===FGF.conv)), c=>c.numero);
+  return `<div class="helpbox">Guias no padrão TISS da ANS, preenchidas com a conta: <b>Resumo de Internação</b>, <b>SP/SADT</b>, <b>Honorário Individual</b> (uma por profissional), <b>Outras Despesas</b> e o <b>Espelho da Conta</b>.</div>
+  <div class="card"><div class="actions mb">Apresentação ${fatCompSel(FGF.mes, "FGF.mes=this.value;render()")}<select class="inp" style="width:auto;" onchange="FGF.conv=this.value;render()"><option value="">Todos os convênios</option>${opcoesRef('convenios','').map(c=>`<option value="${c.id}" ${FGF.conv===c.id?'selected':''}>${esc(c.nome)}</option>`).join('')}</select><span class="small muted">${l.length} conta(s) · ${fmtMoeda(l.reduce((s,c)=>s+(c.total||0),0))}</span></div>
+  ${tabelaHTML(['Conta','Paciente','Convênio','Tipo','Total','Situação','Guias'], l.map(c=>[esc(c.numero), esc(nomeDe('pacientes', c.pacienteId)), esc(c.particular?'PARTICULAR':nomeDe('convenios', c.convenioId)), esc(c.tipo||''), fmtMoeda(c.total||0), esc((c.situacao||'').toLowerCase()), fatGuiasBotoes(c)]), {html:true})}</div>`;
+};
+function fatGuiasBotoes(c){ const b=[[c.tipo==='INTERNAÇÃO'?'resumo':'sadt', c.tipo==='INTERNAÇÃO'?'Resumo de internação':'SP/SADT'],['honorario','Honorários'],['despesas','Outras despesas'],['espelho','Espelho']]; return `<span class="nowrap">${b.map(x=>`<button class="btn ghost small" onclick="fatGuiaImprimir('${c.id}','${x[0]}')">🖨️ ${x[1]}</button>`).join('')}</span>`; }
+function fatGuiasConta(id){ const c=obter('fatContas', id); if(!c) return; abrirModal({titulo:'📑 Guias da conta nº '+esc(c.numero), corpo:`<div class="actions">${fatGuiasBotoes(c)}</div>`}); }
+function fatGuiaImprimir(id, tipo){
+  if(semClinico()) return; const c=(FCX&&FCX.c.id===id)?FCX.c:obter('fatContas', id); if(!c) return; const p=obter('pacientes', c.pacienteId)||{}; const conv=obter('convenios', c.convenioId)||{}; const i=c.internacaoId?obter('hospInternacoes', c.internacaoId):null; const un=obter('unidades', (i||{}).unidadeId||hospUnidade())||{}; const prof=obter('profissionais', c.profissionalId)||{};
+  const kv=(r,v,span)=>`<div ${span?`style="grid-column:span ${span};"`:''}><span>${r}</span>${v||'&nbsp;'}</div>`; const tot=fatContaTotais(c);
+  const cab=`<div class="doc-box"><div class="doc-grid">${kv('1 - Registro ANS', esc(conv.registroANS||''))}${kv('2 - Nº guia no prestador', esc(c.numero))}${kv('Nº guia na operadora', esc(c.guiaOperadora||''))}${kv('Senha', esc(c.senha||''))}${kv('Nº da carteira', esc(c.carteira||''), 2)}${kv('Validade da carteira', fmtData(c.validadeCarteira))}${kv('CNS', esc(fmtCNS(p.cns)||''))}${kv('Nome do beneficiário', '<b>'+esc(p.nome||'')+'</b>', 3)}${kv('Plano', esc(nomeDe('fatPlanos', c.planoId)||(c.particular?'PARTICULAR':'')))}${kv('Código do prestador na operadora', esc(conv.codigoPrestador||''), 2)}${kv('Nome do contratado', esc(un.nome||entidadeFantasia()), 1)}${kv('CNES', esc(un.cnes||''))}</div></div>`;
+  const tabProc=itens=>tabelaHTML(['Data','Tabela','Código','Descrição','Qtd','Grau','Valor unit.','Total'], itens.map(x=>[fmtData(x.data), x.tabela||'', x.codigo||'', x.descricao||'', fmtNum(x.qtd), x.grau||'', fmtMoeda(x.valorUnit), fmtMoeda(x.total)]));
+  const assin=`<div class="linha-ass"><div>Assinatura do contratado</div><div>Assinatura do beneficiário ou responsável</div></div>`;
+  let html='';
+  if(tipo==='resumo') html=docCabecalho('Guia de Resumo de Internação', 'Padrão TISS', un.id)+cab+`<div class="doc-box"><div class="doc-grid">${kv('Caráter do atendimento', esc(c.carater||''))}${kv('Tipo de faturamento', 'TOTAL')}${kv('Início do faturamento', fmtData(c.dataInicio))}${kv('Fim do faturamento', fmtData(c.dataFim))}${kv('Tipo de internação', esc(c.tipoInternacao||''))}${kv('Regime', esc(c.regime||''))}${kv('CID principal', esc(fmtCID(c.cid||'')))}${kv('Motivo de encerramento', esc(c.saidaMotivo||((i&&i.alta)?hospMotivo(i):'')))}</div></div><div class="doc-box"><b>Procedimentos e exames realizados</b>${tabProc((c.itens||[]).filter(x=>x.grupo==='PROCEDIMENTO'))}</div>
+    <div class="doc-box"><div class="doc-grid">${kv('Procedimentos', fmtMoeda(tot.PROCEDIMENTO||0))}${kv('Diárias', fmtMoeda(tot['DIÁRIA']||0))}${kv('Taxas e aluguéis', fmtMoeda((tot.TAXA||0)+(tot.ALUGUEL||0)))}${kv('Materiais', fmtMoeda(tot.MATERIAL||0))}${kv('OPME', fmtMoeda(tot.OPM||0))}${kv('Medicamentos', fmtMoeda(tot.MEDICAMENTO||0))}${kv('Gases medicinais', fmtMoeda(tot['GASES MEDICINAIS']||0))}${kv('Total geral', '<b>'+fmtMoeda(fatContaTotal(c))+'</b>')}</div></div>${assin}`;
+  else if(tipo==='sadt') html=docCabecalho('Guia de SP/SADT', 'Padrão TISS', un.id)+cab+`<div class="doc-box"><div class="doc-grid">${kv('Profissional solicitante', esc(prof.nome||''), 2)}${kv('Conselho / nº', esc([prof.conselho, prof.registro].filter(Boolean).join(' ')))}${kv('CBO', esc((obter('especialidades', prof.especialidadeId)||{}).cbo||''))}${kv('Caráter', esc(c.carater||''))}${kv('Indicação clínica', esc(c.hipotese||''), 3)}</div></div><div class="doc-box"><b>Procedimentos realizados</b>${tabProc((c.itens||[]).filter(x=>x.grupo==='PROCEDIMENTO'))}</div><div class="doc-box"><b>Total geral:</b> ${fmtMoeda(fatContaTotal(c))}</div>${assin}`;
+  else if(tipo==='honorario'){ const porProf=agrupar((c.itens||[]).filter(x=>x.grupo==='PROCEDIMENTO' && x.profissionalId), x=>x.profissionalId); if(!porProf.size){ showToast('Nenhum procedimento com profissional nesta conta.','warning'); return; }
+    html=[...porProf.entries()].map(([pid, its], n)=>{ const pr=obter('profissionais', pid)||{}; return (n?'<div class="quebra"></div>':'')+docCabecalho('Guia de Honorário Individual', 'Padrão TISS', un.id)+cab+`<div class="doc-box"><div class="doc-grid">${kv('Profissional executante', '<b>'+esc(pr.nome||'')+'</b>', 2)}${kv('Conselho / nº', esc([pr.conselho, pr.registro].filter(Boolean).join(' ')))}${kv('CPF / CNS', esc(fmtCPF(pr.cpf)||fmtCNS(pr.cns)||''))}${kv('Data do procedimento', fmtData(its[0].data))}</div></div><div class="doc-box">${tabProc(its)}</div><div class="doc-box"><b>Total de honorários:</b> ${fmtMoeda(its.reduce((s,x)=>s+(x.total||0),0))}</div><div class="linha-ass"><div>Assinatura do profissional</div></div>`; }).join(''); }
+  else if(tipo==='despesas') html=docCabecalho('Guia de Outras Despesas', 'Padrão TISS — anexo da guia principal nº '+esc(c.numero), un.id)+cab+`<div class="doc-box">${tabelaHTML(['CD','Data','Tabela','Código','Descrição','Qtd','Valor unit.','Total'], (c.itens||[]).filter(x=>x.grupo!=='PROCEDIMENTO').map(x=>[FCT_TISS_CD[x.grupo]||'', fmtData(x.data), x.tabela||'', x.codigo||'', x.descricao||'', fmtNum(x.qtd), fmtMoeda(x.valorUnit), fmtMoeda(x.total)]))}<div style="font-size:10px;">CD: 01 gases medicinais · 02 medicamentos · 03 materiais · 05 diárias · 06 aluguéis · 07 taxas · 08 OPME</div></div><div class="doc-box"><b>Total:</b> ${fmtMoeda((c.itens||[]).filter(x=>x.grupo!=='PROCEDIMENTO').reduce((s,x)=>s+(x.total||0),0))}</div>`;
+  else html=docCabecalho('Espelho da Conta', 'Conta nº '+esc(c.numero)+' — '+esc(c.particular?'PARTICULAR':nomeDe('convenios', c.convenioId)), un.id)+cab+FCT_GRUPOS.filter(g=>(c.itens||[]).some(x=>x.grupo===g[0])).map(g=>`<div class="doc-box"><b>${esc(g[1])}</b>${tabProc((c.itens||[]).filter(x=>x.grupo===g[0]))}<div style="text-align:right;"><b>${fmtMoeda(tot[g[0]]||0)}</b></div></div>`).join('')+`<div class="doc-box" style="text-align:right;font-size:15px;"><b>TOTAL DA CONTA: ${fmtMoeda(fatContaTotal(c))}</b>${c.valorPago!==undefined?'<br>Pago: '+fmtMoeda(c.valorPago)+(c.valorGlosado?' · Glosado: '+fmtMoeda(c.valorGlosado):''):''}</div>`;
+  imprimirHTML(html, 'paisagem'); registrarAcao('Imprimiu '+tipo+' da conta nº '+c.numero);
+}
+
+/* ---------------- Consórcio ---------------- */
+let FCSF={aba:'fechamento', mes:addMeses(mesDe(hojeISO()),-1), data:hojeISO(), tipo:'AMBULATORIAL'};
+function fatMunDoPaciente(p){ const ib=fatIbge6(p.ibge); return ativos('fatConsMunicipios').find(m=>(ib && soDigitos(m.ibge).slice(0,6)===ib) || (!ib && p.municipio && norm(m.nome)===norm(p.municipio)))||null; }
+VIEWS.fatConsorcio=()=>{
+  const t=[['fechamento','🧾 Gerar fechamento'],['recibos','📄 Recibos'],['municipios','🏘️ Municípios integrantes']];
+  let corpo='';
+  if(FCSF.aba==='municipios') corpo=viewCad('fatConsMunicipios',{view:'fatConsorcio'});
+  else if(FCSF.aba==='fechamento') corpo=`<div class="card"><div class="helpbox">Gera um <b>recibo por município integrante</b> com a produção feita nos moradores dele no mês (procedimentos ambulatoriais pela tabela SUS, exames do laboratório ou AIHs), comparada com a cota mensal.</div><div class="formgrid"><div class="field"><label>Mês de referência</label>${fatCompSel(FCSF.mes, "FCSF.mes=this.value")}</div><div class="field"><label>Data do recibo</label><input type="date" class="inp" value="${FCSF.data}" onchange="FCSF.data=this.value"></div><div class="field"><label>Tipo de recibo</label><select class="inp" onchange="FCSF.tipo=this.value">${['AMBULATORIAL','EXAMES (LABORATÓRIO)','HOSPITALAR (AIH)'].map(x=>`<option ${FCSF.tipo===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
+    <div class="actions mt">${pode('fatConsorcio')?`<button class="btn" onclick="fatConsGerar()">🧾 Gerar recibos</button>`:''}<span class="small muted">${ativos('fatConsMunicipios').length} município(s) integrante(s)</span></div></div>`;
+  else { const l=ordenarPor(lista('fatRecibos').filter(r=>r.mes===FCSF.mes), r=>r.numero); corpo=`<div class="card"><div class="actions mb">Mês ${fatCompSel(FCSF.mes, "FCSF.mes=this.value;render()")}<span class="small muted">${l.length} recibo(s) · ${fmtMoeda(l.reduce((s,r)=>s+(r.total||0),0))}</span></div>${tabelaHTML(['Nº','Município','Tipo','Data','Itens','Total','Cota','Saldo da cota',''], l.map(r=>{ const m=obter('fatConsMunicipios', r.municipioId)||{}; return [esc(r.numero), esc(m.nome||''), esc(r.tipo), fmtData(r.data), (r.itens||[]).length, fmtMoeda(r.total), fmtMoeda(m.cotaMensal||0), m.cotaMensal?`<span style="color:${(m.cotaMensal-r.total)<0?'var(--red)':'inherit'};">${fmtMoeda(m.cotaMensal-r.total)}</span>`:'', `<span class="nowrap"><button class="btn ghost small" onclick="fatReciboImprimir('${r.id}')">🖨️</button>${pode('fatConsorcio')?`<button class="btn ghost small" onclick="if(confirm('Excluir o recibo?')){excluir('fatRecibos','${r.id}');render(true);}">🗑</button>`:''}</span>`]; }), {html:true})}</div>`; }
+  return `<div class="tabs">${t.map(([k,r])=>`<div class="tab ${FCSF.aba===k?'active':''}" onclick="FCSF.aba='${k}';render()">${r}</div>`).join('')}</div>${corpo}`;
+};
+async function fatConsGerar(){
+  if(semPermissao('fatConsorcio')) return; const muns=ativos('fatConsMunicipios'); if(!muns.length){ showToast('Cadastre os municípios integrantes.','warning'); return; }
+  carregandoMsg(true,'Juntando a produção…'); const por={}; muns.forEach(m=>por[m.id]={});
+  try{ const c=fatCompetencia(FCSF.mes);
+    if(FCSF.tipo.startsWith('HOSP')){ lista('fatAihs').filter(a=>a.apresentacao===FCSF.mes).forEach(a=>{ const m=fatMunDoPaciente(pacDe(a.pacienteId)); if(!m) return; const k='AIH '+a.numeroAIH; por[m.id][k]={codigo:a.procRealizado, nome:'AIH '+a.numeroAIH+' — '+((fatProc(a.procRealizado)||{}).nome||''), qtd:1, valorUnit:a.valorEstimado||0}; }); }
+    else { await garantirPeriodo(['atendimentos','clinico','sadt','producao','labProducao'], c.inicio, c.fim); const exames=FCSF.tipo.startsWith('EXAMES');
+      todosProcedimentos({ini:c.inicio, fim:c.fim, unidade:''}).filter(p=>p.pacienteId && (exames?p.fonte==='Laboratório'||/^02/.test(p.codigo)&&p.fonte!=='F.A.':!(p.fonte==='Laboratório')) && (p.fonte!=='F.A.'||(obter('atendimentos',p.atendimentoId)||{}).posLancada)).forEach(p=>{ const m=fatMunDoPaciente(pacDe(p.pacienteId)); if(!m) return; const o=por[m.id][p.codigo]||(por[m.id][p.codigo]={codigo:p.codigo, nome:(fatProc(p.codigo)||{}).nome||p.nome||'', qtd:0, valorUnit:fatValorSA(p.codigo)*(1+(m.tabelaValor&&m.tabelaValor.includes('COMPLEMENTO')?(Number(m.complemento)||0)/100:0))}); o.qtd+=Number(p.qtd)||1; }); }
+    let n=0; for(const m of muns){ const itens=Object.values(por[m.id]).map(x=>Object.assign(x, {valorUnit:Math.round(x.valorUnit*100)/100, total:Math.round(x.qtd*x.valorUnit*100)/100})); if(!itens.length) continue;
+      const ant=lista('fatRecibos').find(r=>r.mes===FCSF.mes && r.municipioId===m.id && r.tipo===FCSF.tipo); salvar('fatRecibos', Object.assign({}, ant||{}, {numero:(ant&&ant.numero)||await hospNumero('fatrecibo', FCSF.data), mes:FCSF.mes, municipioId:m.id, tipo:FCSF.tipo, data:FCSF.data, itens, total:Math.round(itens.reduce((s,x)=>s+x.total,0)*100)/100})); n++; }
+    registrarAcao('Gerou '+n+' recibo(s) do consórcio de '+fmtMes(FCSF.mes)); showToast(n?n+' recibo(s) gerado(s).':'Nenhuma produção de moradores dos municípios integrantes no mês.', n?'success':'warning'); FCSF.aba='recibos';
+  }catch(e){ console.error(e); showToast('Falha: '+msgErro(e),'error'); } finally{ carregandoMsg(false); render(true); }
+}
+function fatReciboImprimir(id){ const r=obter('fatRecibos', id); if(!r) return; const m=obter('fatConsMunicipios', r.municipioId)||{};
+  imprimirHTML(docCabecalho('Recibo nº '+esc(r.numero)+' — Consórcio', esc(r.tipo)+' · '+fmtMes(r.mes))+`<div class="doc-box"><b>Município:</b> ${esc(m.nome||'')} (IBGE ${esc(m.ibge||'')}) · <b>Data:</b> ${fmtData(r.data)}</div>${tabelaHTML(['Código','Procedimento','Qtd','Valor unit.','Total'], (r.itens||[]).map(x=>[fmtSigtap(x.codigo||''), x.nome, fmtNum(x.qtd), fmtMoeda(x.valorUnit), fmtMoeda(x.total)]), {rodape:['','Total','','',fmtMoeda(r.total)]})}<div class="doc-box">Recebemos do município de <b>${esc(m.nome||'')}</b> a importância de <b>${fmtMoeda(r.total)}</b> referente aos serviços acima, prestados aos seus munícipes em ${fmtMes(r.mes)}.${m.cotaMensal?' Cota mensal: '+fmtMoeda(m.cotaMensal)+'.':''}</div><div class="linha-ass"><div>Responsável</div></div>`); }
+
+/* ---------------- Relatórios ---------------- */
+async function fatProducao(F){ const c=fatCompetencia(F.fatComp||mesDe(hojeISO())); await garantirPeriodo(['atendimentos','clinico','sadt','producao','labProducao'], c.inicio, c.fim); return todosProcedimentos({ini:c.inicio, fim:c.fim, unidade:F.unidade||'', profissional:F.profissional||''}).filter(p=>(!F.unidade||p.unidadeId===F.unidade) && (!F.profissional||p.profissionalId===F.profissional) && (!F.especialidade||p.especialidadeId===F.especialidade) && (p.fonte!=='F.A.' || (obter('atendimentos',p.atendimentoId)||{}).posLancada)); }
+const FAT_AGRUP={grupo:['Grupo do procedimento', p=>({'01':'01 Promoção e prevenção','02':'02 Finalidade diagnóstica','03':'03 Clínicos','04':'04 Cirúrgicos','05':'05 Transplantes','06':'06 Medicamentos','07':'07 Órteses e próteses','08':'08 Ações complementares'})[String(p.codigo).slice(0,2)]||String(p.codigo).slice(0,2)], financiamento:['Financiamento', p=>{ const f=(fatProc(p.codigo)||{}).financiamento; return f?(f+' '+(((fatSigtapEm().financiamentos)||{})[f]||'')):'(atualize o SIGTAP)'; }], instrumento:['Instrumento de registro', p=>(fatProc(p.codigo)||{}).instrumento||'?'], unidade:['Unidade', p=>nomeDe('unidades', p.unidadeId)||'—'], profissional:['Profissional', p=>nomeDe('profissionais', p.profissionalId)||'—'], especialidade:['Especialidade', p=>nomeDe('especialidades', p.especialidadeId)||'—']};
+function fatGrupo(arr, fn){ const m={}; arr.forEach(x=>{ const k=fn(x); (m[k]=m[k]||[]).push(x); }); return m; }
+function fatSomaProc(l){ const m={}; l.forEach(p=>{ const o=m[p.codigo]||(m[p.codigo]={codigo:p.codigo, nome:(fatProc(p.codigo)||{}).nome||p.nome||'', qtd:0}); o.qtd+=Number(p.qtd)||1; }); return Object.values(m).sort((a,b)=>a.codigo.localeCompare(b.codigo)); }
+RELS.push(
+  {mod:'fat', id:'fatRelFatura', g:'SIA — Ambulatorial', t:'Fatura (boletim de produção com valores)', f:['fatComp','unidade'], tabs:[], gerar:async F=>{ const l=fatSomaProc(await fatProducao(F)); let tot=0; const linhas=l.map(x=>{ const v=fatValorSA(x.codigo); tot+=v*x.qtd; return [fmtSigtap(x.codigo), x.nome, (fatProc(x.codigo)||{}).instrumento||'?', x.qtd, fmtMoeda(v), fmtMoeda(v*x.qtd)]; }); return {cab:['Código','Procedimento','Instrumento','Quantidade','Valor unit. (SUS)','Total'], linhas, num:[3], rodape:['','Total','',l.reduce((s,x)=>s+x.qtd,0),'',fmtMoeda(tot)], sub:fmtMes(F.fatComp)}; }},
+  {mod:'fat', id:'fatRelAnalitico', g:'SIA — Ambulatorial', clin:true, t:'Faturamento analítico', f:['fatComp','unidade','profissional','especialidade'], tabs:[], gerar:async F=>{ const l=ordenarPor(await fatProducao(F), p=>p.data+(p.profissionalId||'')); let tot=0; return {cab:['Data','Unidade','Profissional','CBO','Paciente','Procedimento','Fonte','Qtd','Valor'], linhas:l.map(p=>{ const v=fatValorSA(p.codigo)*(Number(p.qtd)||1); tot+=v; const prof=obter('profissionais', p.profissionalId)||{}; return [fmtData(p.data), nomeDe('unidades', p.unidadeId), prof.nome||'', p.cbo||(obter('especialidades', prof.especialidadeId)||{}).cbo||'', p.pacienteId?nomeDe('pacientes', p.pacienteId):'', fmtSigtap(p.codigo)+' '+((fatProc(p.codigo)||{}).nome||p.nome||''), p.fonte, p.qtd, fmtMoeda(v)]; }), num:[7], sub:l.length+' lançamento(s) · '+fmtMoeda(tot)}; }},
+  {mod:'fat', id:'fatRelResumo', g:'SIA — Ambulatorial', t:'Resumo do faturamento (sintético)', f:['fatComp','unidade'], agrupar:['grupo','financiamento','instrumento','unidade','profissional','especialidade'], tabs:[], gerar:async F=>{ const l=await fatProducao(F); const g=FAT_AGRUP[F.agrupar]||FAT_AGRUP.grupo; const m=fatGrupo(l, g[1]); const totV=l.reduce((s,p)=>s+fatValorSA(p.codigo)*(Number(p.qtd)||1),0); const ks=Object.keys(m).sort();
+    return {cab:[g[0],'Quantidade','Valor (SUS)','% do valor'], linhas:ks.map(k=>{ const v=m[k].reduce((s,p)=>s+fatValorSA(p.codigo)*(Number(p.qtd)||1),0); return [k, m[k].reduce((s,p)=>s+(Number(p.qtd)||1),0), fmtMoeda(v), totV?fmtNum(Math.round(v*1000/totV)/10)+'%':'']; }), num:[1], rodape:['Total', l.reduce((s,p)=>s+(Number(p.qtd)||1),0), fmtMoeda(totV), ''], grafico:{labels:ks.slice(0,15), valores:ks.slice(0,15).map(k=>m[k].reduce((s,p)=>s+(Number(p.qtd)||1),0)), horizontal:true}}; }},
+  {mod:'fat', id:'fatRelProcQtd', g:'SIA — Ambulatorial', t:'Procedimentos × quantidade por unidade', f:['fatComp'], tabs:[], gerar:async F=>{ const l=await fatProducao(Object.assign({}, F, {unidade:''})); const uns=unicos(l.map(p=>p.unidadeId)); const ps=fatSomaProc(l);
+    return {cab:['Código','Procedimento'].concat(uns.map(u=>nomeDe('unidades',u)||'—')).concat(['Total']), linhas:ps.map(x=>[fmtSigtap(x.codigo), x.nome].concat(uns.map(u=>l.filter(p=>p.codigo===x.codigo&&p.unidadeId===u).reduce((s,p)=>s+(Number(p.qtd)||1),0)||'')).concat([x.qtd])), num:uns.map((_,k)=>k+2).concat([uns.length+2])}; }},
+  {mod:'fat', id:'fatRelComparativo', g:'SIA — Ambulatorial', t:'Comparativo de produção (4 competências)', f:['fatComp','unidade'], tabs:[], gerar:async F=>{ const ms=[3,2,1,0].map(k=>addMeses(F.fatComp,-k)); const prods=[]; for(const m of ms) prods.push(await fatProducao(Object.assign({}, F, {fatComp:m}))); const cods=unicos(prods.flat().map(p=>p.codigo)).sort(); const q=(l,c)=>l.filter(p=>p.codigo===c).reduce((s,p)=>s+(Number(p.qtd)||1),0);
+    return {cab:['Código','Procedimento'].concat(ms.map(fmtMes)).concat(['Variação']), linhas:cods.map(c=>{ const v=prods.map(l=>q(l,c)); const ant=v[2]; return [fmtSigtap(c), (fatProc(c)||{}).nome||''].concat(v).concat([ant?fmtNum(Math.round((v[3]-ant)*1000/ant)/10)+'%':(v[3]?'novo':'')]); }), num:[2,3,4,5], grafico:{tipo:'line', labels:ms.map(fmtMes), series:[['Procedimentos', prods.map(l=>l.reduce((s,p)=>s+(Number(p.qtd)||1),0))]]}}; }},
+  {mod:'fat', id:'fatRelMunicipio', g:'SIA — Ambulatorial', t:'Produção por município do paciente', f:['fatComp','unidade'], tabs:[], gerar:async F=>{ const l=(await fatProducao(F)).filter(p=>p.pacienteId); const m=fatGrupo(l, p=>{ const x=pacDe(p.pacienteId); return x.municipio||fatIbge6(x.ibge)||'(sem município)'; }); const linhas=[];
+    Object.keys(m).sort().forEach(k=>fatSomaProc(m[k]).forEach(x=>linhas.push([k, fmtSigtap(x.codigo), x.nome, x.qtd, fmtMoeda(fatValorSA(x.codigo)*x.qtd)]))); return {cab:['Município','Código','Procedimento','Qtd','Valor (SUS)'], linhas, num:[3], sub:Object.entries(m).map(([k,v])=>k+': '+v.length).join(' · ')}; }},
+  {mod:'fat', id:'fatRelProfissional', g:'SIA — Ambulatorial', t:'Produção por profissional', f:['fatComp','unidade','profissional'], tabs:[], gerar:async F=>{ const l=await fatProducao(F); const m=fatGrupo(l, p=>p.profissionalId||''); const linhas=[];
+    Object.keys(m).sort((a,b)=>nomeDe('profissionais',a).localeCompare(nomeDe('profissionais',b))).forEach(k=>{ const prof=obter('profissionais',k)||{}; fatSomaProc(m[k]).forEach(x=>linhas.push([prof.nome||'(sem profissional)', (obter('especialidades', prof.especialidadeId)||{}).cbo||'', fmtSigtap(x.codigo), x.nome, x.qtd, fmtMoeda(fatValorSA(x.codigo)*x.qtd)])); }); return {cab:['Profissional','CBO','Código','Procedimento','Qtd','Valor (SUS)'], linhas, num:[4]}; }},
+  {mod:'fat', id:'fatRelFechMunicipio', g:'SIA — Ambulatorial', t:'Fechamento por município (valores)', f:['fatComp'], tabs:[], gerar:async F=>{ const l=(await fatProducao(Object.assign({}, F, {unidade:''}))).filter(p=>p.pacienteId); const mun=p=>{ const x=pacDe(p.pacienteId); return x.municipio||'(sem município)'; }; const m=fatGrupo(l, mun); const aihs=podeClinico()?lista('fatAihs').filter(a=>a.apresentacao===F.fatComp):[]; const ma=fatGrupo(aihs, a=>pacDe(a.pacienteId).municipio||'(sem município)'); const ks=unicos(Object.keys(m).concat(Object.keys(ma))).sort();
+    return {cab:['Município','Procedimentos ambulatoriais','Valor ambulatorial','AIHs','Valor AIH','Total'], linhas:ks.map(k=>{ const va=(m[k]||[]).reduce((s,p)=>s+fatValorSA(p.codigo)*(Number(p.qtd)||1),0), vh=(ma[k]||[]).reduce((s,a)=>s+(a.valorEstimado||0),0); return [k, (m[k]||[]).reduce((s,p)=>s+(Number(p.qtd)||1),0), fmtMoeda(va), (ma[k]||[]).length, fmtMoeda(vh), fmtMoeda(va+vh)]; }), num:[1,3]}; }},
+  {mod:'fat', id:'fatRelAihProc', g:'SIH — AIH', clin:true, t:'Procedimentos realizados nas AIHs', f:['fatComp'], tabs:[], gerar:async F=>{ const l=ordenarPor(lista('fatAihs').filter(a=>a.apresentacao===F.fatComp), a=>a.numeroAIH); const linhas=[]; l.forEach(a=>(a.procedimentos||[]).forEach(x=>linhas.push([a.numeroAIH, nomeDe('pacientes', a.pacienteId), fmtSigtap(x.codigo), (fatProc(x.codigo)||{}).nome||'', x.qtd, nomeDe('profissionais', x.profissionalId)||'(hospital)', x.cbo||'', fmtMoeda(fatValorAIH(x.codigo)*(Number(x.qtd)||1))]))); return {cab:['AIH','Paciente','Código','Procedimento','Qtd','Profissional','CBO','Valor'], linhas, num:[4], sub:l.length+' AIH(s) de '+fmtMes(F.fatComp)}; }},
+  {mod:'fat', id:'fatRelAihFaturadas', g:'SIH — AIH', clin:true, t:'Internações faturadas por município de residência', f:['fatComp'], tabs:[], gerar:async F=>{ const l=ordenarPor(lista('fatAihs').filter(a=>a.apresentacao===F.fatComp), a=>(pacDe(a.pacienteId).municipio||'')+a.numeroAIH); return {cab:['Município','AIH','Paciente','Internação','Saída','Dias','Proc. realizado','CID','Valor'], linhas:l.map(a=>{ const i=obter('hospInternacoes', a.internacaoId)||{}; const p=pacDe(a.pacienteId); return [p.municipio||'(sem município)', a.numeroAIH, p.nome||'', fmtData(i.dataEntrada), fmtData((i.alta||{}).data), i.dataEntrada?Math.max(1,hospDias(i)):'', fmtSigtap(a.procRealizado)+' '+((fatProc(a.procRealizado)||{}).nome||''), fmtCID(a.cidPrincipal||''), fmtMoeda(a.valorEstimado||0)]; }), num:[5], rodape:['Total', l.length, '', '', '', '', '', '', fmtMoeda(l.reduce((s,a)=>s+(a.valorEstimado||0),0))]}; }},
+  {mod:'fat', id:'fatRelAihResumo', g:'SIH — AIH', clin:true, t:'Resumo de fatura de AIH', f:['fatComp'], tabs:[], gerar:async F=>{ const l=lista('fatAihs').filter(a=>a.apresentacao===F.fatComp); const m=fatGrupo(l, a=>a.procRealizado); return {cab:['Proc. realizado','Descrição','AIHs','Valor SH+SP (SIGTAP)','Total estimado'], linhas:Object.keys(m).sort().map(k=>[fmtSigtap(k), (fatProc(k)||{}).nome||'', m[k].length, fmtMoeda(fatValorAIH(k)), fmtMoeda(m[k].reduce((s,a)=>s+(a.valorEstimado||0),0))]), num:[2], rodape:['Total','',l.length,'',fmtMoeda(l.reduce((s,a)=>s+(a.valorEstimado||0),0))], sub:fmtMes(F.fatComp)+' · '+l.filter(a=>a.situacao==='EXPORTADA').length+' exportada(s)'}; }},
+  {mod:'fat', id:'fatRelCbo', g:'Tabelas', t:'Procedimentos compatíveis com o CBO', f:['fatCbo'], tabs:[], gerar:async F=>{ await garantirTabela(['fatCompatCbo','fatCbos']); const cbo=soDigitos(F.fatCbo); if(!cbo) return {erro:'Informe o CBO (6 dígitos).'}; if(!lista('fatCompatCbo').length) return {erro:'Atualize a Tabela Unificada (SIGTAP) primeiro — Faturamento → Atualizar Tabela Unificada.'};
+    const l=lista('fatCompatCbo').filter(r=>String(r.cbos||'').split(' ').includes(cbo)).map(r=>r.codigo).sort(); return {cab:['Código','Procedimento','Instrumento','Valor SA','Valor SH+SP'], linhas:l.map(c=>{ const p=fatProc(c)||{}; return [fmtSigtap(c), p.nome||'(não cadastrado)', p.instrumento||'', fmtMoeda(fatValorSA(c)), fmtMoeda(fatValorAIH(c))]; }), sub:'CBO '+cbo+' '+fatNomeCbo(cbo)+' — '+l.length+' procedimento(s)'}; }},
+  {mod:'fat', id:'fatRelConvFech', g:'Convênios', clin:true, t:'Fechamento do convênio', f:['fatComp','fatConvenio'], tabs:[], gerar:async F=>{ const l=ordenarPor(lista('fatContas').filter(c=>(c.apresentacao||mesDe(c.dataInicio||''))===F.fatComp && (!F.fatConvenio||c.convenioId===F.fatConvenio)), c=>c.numero); return {cab:['Conta','Paciente','Convênio','Tipo','Período','Total','Pago','Glosado','Situação'], linhas:l.map(c=>[c.numero, nomeDe('pacientes', c.pacienteId), c.particular?'PARTICULAR':nomeDe('convenios', c.convenioId), c.tipo, fmtData(c.dataInicio)+(c.dataFim?' a '+fmtData(c.dataFim):''), fmtMoeda(c.total||0), c.valorPago!==undefined?fmtMoeda(c.valorPago):'', c.valorGlosado?fmtMoeda(c.valorGlosado):'', c.situacao]), rodape:['Total',l.length,'','','',fmtMoeda(l.reduce((s,c)=>s+(c.total||0),0)), fmtMoeda(l.reduce((s,c)=>s+(Number(c.valorPago)||0),0)), fmtMoeda(l.reduce((s,c)=>s+(Number(c.valorGlosado)||0),0)), '']}; }},
+  {mod:'fat', id:'fatRelConvConf', g:'Convênios', clin:true, t:'Conferência de contas (itens)', f:['fatComp','fatConvenio'], tabs:[], gerar:async F=>{ const l=lista('fatContas').filter(c=>(c.apresentacao||mesDe(c.dataInicio||''))===F.fatComp && (!F.fatConvenio||c.convenioId===F.fatConvenio)); const linhas=[]; ordenarPor(l, c=>c.numero).forEach(c=>(c.itens||[]).forEach(x=>linhas.push([c.numero, nomeDe('pacientes', c.pacienteId), x.grupo, fmtData(x.data), x.codigo||'', x.descricao||'', x.qtd, fmtMoeda(x.valorUnit), fmtMoeda(x.total)]))); return {cab:['Conta','Paciente','Grupo','Data','Código','Descrição','Qtd','Unitário','Total'], linhas, num:[6]}; }},
+  {mod:'fat', id:'fatRelHonorarios', g:'Convênios', clin:true, t:'Honorários médicos', f:['fatComp','fatConvenio'], tabs:[], gerar:async F=>{ const l=lista('fatContas').filter(c=>(c.apresentacao||mesDe(c.dataInicio||''))===F.fatComp && (!F.fatConvenio||c.convenioId===F.fatConvenio)); const linhas=[]; l.forEach(c=>(c.itens||[]).filter(x=>x.grupo==='PROCEDIMENTO'&&x.profissionalId).forEach(x=>linhas.push([nomeDe('profissionais', x.profissionalId), c.numero, nomeDe('pacientes', c.pacienteId), x.codigo||'', x.descricao||'', (FCT_GRAUS.find(g=>g[0]===x.grau)||[])[1]||'', fmtMoeda(x.total)]))); linhas.sort((a,b)=>a[0].localeCompare(b[0])); return {cab:['Profissional','Conta','Paciente','Código','Procedimento','Grau','Valor'], linhas}; }},
+  {mod:'fat', id:'fatRelRecibos', g:'Consórcio', t:'Recibos do consórcio', f:['fatComp'], tabs:[], gerar:async F=>{ const l=lista('fatRecibos').filter(r=>r.mes===F.fatComp); return {cab:['Recibo','Município','Tipo','Data','Total','Cota','Saldo'], linhas:l.map(r=>{ const m=obter('fatConsMunicipios', r.municipioId)||{}; return [r.numero, m.nome||'', r.tipo, fmtData(r.data), fmtMoeda(r.total), fmtMoeda(m.cotaMensal||0), m.cotaMensal?fmtMoeda(m.cotaMensal-r.total):'']; })}; }},
+);
+VIEWS.fatRelatorios=()=>relatoriosHTML('fat');
+POS_RENDER.fatRelatorios=()=>POS_RENDER.relatorios();
+
+/* ---------------- Ligações com o resto do sistema ---------------- */
+function fatBadge(id){ try{ if(!podeClinico()) return 0; if(id==='fatAih') return typeof HOSP_VIEWS==='undefined'?0:fatAihPendentes(addDias(hojeISO(),-60)).length; if(id==='fatContas') return fatContasPendentes().length; }catch(e){} return 0; }
+if(typeof hospAltaAbaHTML==='function'){ const _hAltaFat=hospAltaAbaHTML; hospAltaAbaHTML=function(i, lau){ let h=_hAltaFat(i, lau); try{ if(i.situacao==='alta' && !FAT_VIEWS.every(v=>moduloOculto(v))){ if((i.tipo||'SUS')==='SUS' && podeVer('fatAih')){ const a=obter('fatAihs', fatAihId(i.id)); h+=`<div class="card"><h2>💵 Faturamento (AIH)</h2><div class="small mb">${a?'AIH '+esc(a.numeroAIH)+' — '+esc(a.situacao.toLowerCase())+' · '+fmtMoeda(a.valorEstimado||0):'Ainda sem AIH lançada.'}</div>${pode('fatAih')?`<button class="btn secondary" onclick="fatAihAbrir('${i.id}')">📋 ${a?'Abrir':'Lançar'} a AIH</button>`:''}</div>`; } else if(i.tipo!=='SUS' && podeVer('fatContas')){ const c=lista('fatContas').find(x=>x.internacaoId===i.id); h+=`<div class="card"><h2>💵 Conta do convênio / particular</h2><div class="small mb">${c?'Conta nº '+esc(c.numero)+' — '+fmtMoeda(c.total||0)+' ('+esc((c.situacao||'').toLowerCase())+')':'Conta ainda não aberta.'}</div>${pode('fatContas')?`<button class="btn secondary" onclick="${c?`fatContaAbrir('${c.id}')`:`fatContaDaInternacao('${i.id}')`}">🧮 ${c?'Abrir':'Abrir a'} conta</button>`:''}</div>`; } } }catch(e){ console.error(e); } return h; }; }
+if(typeof MODULOS_PLANEJADOS!=='undefined'){ const k=MODULOS_PLANEJADOS.findIndex(m=>/Faturamento/.test(m[1])); if(k>=0) MODULOS_PLANEJADOS.splice(k,1); }
+if(typeof EXP_REFS!=='undefined') Object.assign(EXP_REFS, {planoId:'fatPlanos', tabelaId:'fatTabelas', coeficienteId:'fatCoeficientes', municipioId:'fatConsMunicipios'});
+if(typeof TAB_TITULOS!=='undefined') Object.assign(TAB_TITULOS, {fatFechamentos:'Fechamentos do BPA-MAG', fatBpaImportados:'BPA importados de outras unidades', fatAihs:'AIHs lançadas', fatContas:'Contas de convênio e particulares', fatCih:'CIH (internações não SUS)', fatRecibos:'Recibos do consórcio', fatEquiv:'Medicamentos e materiais × TISS', fatCompatCbo:'Compatibilidade procedimento × CBO (SIGTAP)', fatCbos:'Ocupações (CBO)'});
+
+/* ---------------- Demonstração ---------------- */
+async function seedDemoFat(){
+  if(lista('fatAihs').length || lista('fatContas').length) return;
+  const e=cfgEnt(); const ibge=soDigitos(e.ibge||'354140').slice(0,6)||'354140'; const med=ativos('profissionais').find(p=>p.tipo==='medico')||{};
+  salvarConfig({fat:Object.assign({}, cfgGeral().fat||{}, {orgaoNome:'SECRETARIA MUNICIPAL DE SAUDE', orgaoSigla:'SMS', orgaoCnpj:soDigitos(e.cnpj||'')||'00000000000000', destinoNome:'SECRETARIA MUNICIPAL DE SAUDE', destinoIndicador:'M', ibgeMunicipio:ibge, orgaoEmissorAIH:'M'+ibge+'000', diretorClinicoId:med.id||''})});
+  const co=salvar('fatCoeficientes', {nome:'COEFICIENTE PADRÃO (DEMONSTRAÇÃO)', valorCH:0.55, valorUCO:14.5, valorFilme:21.7, ativo:true});
+  const tuss=lista('fatTabelas').find(t=>t.tipo==='TUSS');
+  const conv=salvar('convenios', {nome:'PLANO DE SAÚDE EXEMPLO (DEMONSTRAÇÃO)', tipoConv:'CONVÊNIO / PLANO DE SAÚDE', registroANS:'000000', tabelaId:tuss?tuss.id:'', coeficienteId:co.id, tabelaMedId:'PREÇO DE REFERÊNCIA DA FARMÁCIA', acrescimoMed:20, prazoDias:30, ativo:true});
+  salvar('fatPlanos', {convenioId:conv.id, nome:'ENFERMARIA EXEMPLO', acomodacao:'ENFERMARIA', ativo:true});
+  [['10101012','CONSULTA EM CONSULTÓRIO (DEMONSTRAÇÃO)',100],['10102019','VISITA HOSPITALAR (DEMONSTRAÇÃO)',60],['40301630','HEMOGRAMA (DEMONSTRAÇÃO)',null]].forEach(([codigo,nome,ch])=>salvar('fatProcConv', {tabelaId:tuss?tuss.id:'', codigo, nome, ch:ch||'', valor:ch?'':12.5, ativo:true}));
+  salvar('fatConsMunicipios', {nome:'MUNICÍPIO VIZINHO (DEMONSTRAÇÃO)', ibge:'999999', uf:'SP', cotaMensal:15000, tabelaValor:'TABELA SUS (SIGTAP)', ativo:true});
+  if(typeof HOSP_VIEWS!=='undefined'){ const alta=lista('hospInternacoes').find(i=>i.situacao==='alta' && (i.tipo||'SUS')==='SUS'); if(alta){ const a=fatAihPadrao(alta); a.numeroAIH='3526100000011'; a.autorizadorNome='MÉDICO AUTORIZADOR (DEMONSTRAÇÃO)'; a.autorizadorDoc='700000000000000'; a.valorEstimado=fatAihValor(a); a.criticas=fatAihCritica(a).erros.length; salvar('fatAihs', a); } }
+  const p=ativos('pacientes').find(x=>idadeAnos(x.nascimento)>=18); if(p){ const pc=lista('fatProcConv').find(x=>x.codigo==='10101012'); const v=fatValorProcConv(pc, conv);
+    salvar('fatContas', {numero:await hospNumero('fatconta', hojeISO()), tipo:'AMBULATORIAL', pacienteId:p.id, convenioId:conv.id, carteira:'0000000000000000', particular:false, dataInicio:hojeISO(), dataFim:hojeISO(), apresentacao:mesDe(hojeISO()), carater:'ELETIVA', profissionalId:med.id||'', itens:[{id:uid(), grupo:'PROCEDIMENTO', data:hojeISO(), codigo:'10101012', tabela:'22', descricao:pc?pc.nome:'CONSULTA', qtd:1, valorUnit:v, total:v, profissionalId:med.id||'', grau:'12', origem:'manual'}], total:v, situacao:'ABERTA'}); }
+}
 
 </script>
 </body>
