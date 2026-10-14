@@ -83,6 +83,21 @@ nav.navlist{display:flex;flex-direction:column;gap:3px;}
 .navgroup.has-active>.navgroup-head{color:#fff;background:rgba(255,255,255,.07);}
 .navgroup-items{display:none;flex-direction:column;gap:2px;padding:2px 0 8px 6px;margin-left:14px;border-left:1px solid rgba(255,255,255,.14);}
 .navgroup.open>.navgroup-items{display:flex;}
+/* Módulo (ex.: MÓDULO AMBULATÓRIO): abre/fecha todos os grupos de telas dele */
+.navmod{margin-bottom:8px;}
+.navmod-head{display:flex;align-items:center;gap:10px;padding:12px 12px;border-radius:10px;cursor:pointer;user-select:none;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);font-size:12.5px;font-weight:800;letter-spacing:.06em;color:#fff;transition:var(--transition);}
+.navmod-head:hover{background:rgba(255,255,255,.2);}
+.navmod-head .mic{font-size:18px;width:22px;text-align:center;}
+.navmod-head .nbadge{margin-left:auto;}
+.navmod-head .chev{margin-left:auto;font-size:10px;transition:transform .18s ease;}
+.navmod-head .nbadge + .chev{margin-left:6px;}
+.navmod.open>.navmod-head{background:rgba(255,255,255,.22);border-color:rgba(255,255,255,.4);}
+.navmod.open>.navmod-head .chev{transform:rotate(90deg);}
+.navmod.has-active:not(.open)>.navmod-head{box-shadow:inset 3px 0 0 #F6C453;}
+.navmod-dica{font-size:10.5px;opacity:.6;padding:5px 12px 0;}
+.navmod-items{display:none;padding:8px 0 2px 4px;}
+.navmod.open>.navmod-items{display:block;}
+.crumb{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--teal);margin-bottom:3px;white-space:pre;}
 .nav-vazio{font-size:11.5px;opacity:.6;padding:12px 10px;line-height:1.4;}
 .side-footer{margin-top:22px;padding:12px 10px;background:rgba(255,255,255,.08);border-radius:8px;font-size:11px;line-height:1.55;opacity:.9;}
 .side-footer a{color:#fff;opacity:.85;text-decoration:none;}
@@ -132,7 +147,7 @@ table{width:100%;border-collapse:collapse;font-size:12.5px;}
 thead th{text-align:left;background:var(--teal-soft);color:var(--teal-dark);font-weight:700;padding:8px 10px;border-bottom:2px solid var(--line);white-space:nowrap;position:sticky;top:0;z-index:1;}
 tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
 tbody tr:hover{background:#F8FBFA;}
-tbody td:has(> b:first-child){min-width:190px;}
+tbody td:not(.num):has(> b:first-child){min-width:190px;}
 tbody tr.clic{cursor:pointer;}
 tfoot td{padding:8px 10px;font-weight:700;background:#F0F7F4;border-top:2px solid var(--line);}
 .table-wrap{overflow:auto;max-height:560px;border:1px solid var(--line);border-radius:8px;}
@@ -427,6 +442,7 @@ body.modo-painel #painelTV{display:flex;}
     <div class="topbar">
       <button id="menuBtn" onclick="toggleSidebar()">☰</button>
       <div style="flex:1;min-width:240px;">
+        <div class="crumb" id="pageCrumb"></div>
         <h1 id="pageTitle">Painel</h1>
         <div class="desc" id="pageDesc"></div>
       </div>
@@ -523,10 +539,13 @@ const DOC_CONTADORES = 'contadores';
    Ao publicar uma alteração nova: some 1 em APP_ALTERACAO e
    atualize APP_DATA. O mês sequencial é calculado sozinho.
      1.0.2026   14/10/2026   criação — módulo Ambulatório completo
+     1.01.2026  14/10/2026   menu lateral reunido em "MÓDULO AMBULATÓRIO", que abre e
+                             fecha todas as telas com um clique; caminho do módulo
+                             acima do título de cada tela
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 0;
+const APP_ALTERACAO = 1;
 const APP_DATA = '2026-10-14';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -1622,17 +1641,45 @@ function navBadge(id){
   }catch(e){}
   return 0;
 }
+/* Módulos do menu: cada módulo do sistema reúne os seus grupos de telas e abre/fecha com um
+   clique. Hoje só existe o Ambulatório; um módulo novo (Farmácia, Laboratório...) entra aqui
+   com a lista dos grupos dele. */
+const MODULOS_MENU=[
+  {id:'amb', nome:'MÓDULO AMBULATÓRIO', ic:'🩺', grupos:MENU.map(g=>g.g)},
+];
+const NAV_MODULOS_KEY='pis_nav_modulos';
+let navModAbertos=null;
+function navModulosSet(){
+  if(navModAbertos) return navModAbertos;
+  try{ const s=JSON.parse(localStorage.getItem(NAV_MODULOS_KEY)||'null'); if(Array.isArray(s)) navModAbertos=new Set(s); }catch(e){}
+  if(!navModAbertos) navModAbertos=new Set();
+  return navModAbertos;
+}
+function toggleNavModulo(id){ const a=navModulosSet(); if(a.has(id)) a.delete(id); else a.add(id); try{ localStorage.setItem(NAV_MODULOS_KEY, JSON.stringify([...a])); }catch(e){} renderNav(); }
+function moduloDoGrupo(g){ return MODULOS_MENU.find(m=>m.grupos.includes(g)); }
 function renderNav(){
   const nav=document.getElementById('navlist'); if(!nav) return;
-  const termo=norm(navBusca); const abertos=navAbertosSet();
+  const termo=norm(navBusca); const abertos=navAbertosSet(); const modAbertos=navModulosSet();
   const grupos=MENU.map(g=>({g:g.g, ic:g.ic, itens:g.itens.filter(it=>podeVer(it.id) && (!termo || norm(it.r).includes(termo) || norm(g.g).includes(termo) || norm(it.d||'').includes(termo)))})).filter(g=>g.itens.length);
-  nav.innerHTML = grupos.length===0 ? `<div class="nav-vazio">Nenhum módulo encontrado para “${esc(navBusca)}”.</div>` : grupos.map(g=>{
+  const grupoHTML=g=>{
     const ativo=g.itens.some(it=>it.id===currentView); const aberto=!!termo || abertos.has(g.g) || ativo;
     return `<div class="navgroup ${aberto?'open':''} ${ativo?'has-active':''}">
       <div class="navgroup-head" onclick="toggleNavGrupo('${escJs(g.g)}')"><span class="gic">${g.ic}</span><span>${esc(g.g)}</span><span class="gcount">${g.itens.length}</span><span class="chev">▶</span></div>
       <div class="navgroup-items">${g.itens.map(it=>{ const b=navBadge(it.id); return `<div class="navitem ${currentView===it.id?'active':''}" onclick="goto('${it.id}')" title="${esc(it.d||'')}"><span class="ic">${it.ic}</span>${esc(it.r)}${b?`<span class="nbadge" data-badge="${it.id}">${b}</span>`:''}</div>`; }).join('')}</div>
     </div>`;
-  }).join('');
+  };
+  if(!grupos.length){ nav.innerHTML=`<div class="nav-vazio">Nenhum módulo encontrado para “${esc(navBusca)}”.</div>`; }
+  else nav.innerHTML = MODULOS_MENU.map(m=>{
+    const gs=grupos.filter(g=>m.grupos.includes(g.g)); if(!gs.length) return '';
+    const aberto=!!termo || modAbertos.has(m.id);
+    const ativo=gs.some(g=>g.itens.some(it=>it.id===currentView));
+    const pend=gs.reduce((s,g)=>s+g.itens.reduce((t,it)=>t+(it.id==='recepcao'||it.id==='usuarios'?navBadge(it.id):0),0),0);
+    return `<div class="navmod ${aberto?'open':''} ${ativo?'has-active':''}">
+      <div class="navmod-head" onclick="toggleNavModulo('${m.id}')" title="${aberto?'Clique para fechar':'Clique para abrir todas as telas do módulo'}"><span class="mic">${m.ic}</span><span>${esc(m.nome)}</span>${!aberto&&pend?`<span class="nbadge">${pend}</span>`:''}<span class="chev">▶</span></div>
+      ${aberto?'':'<div class="navmod-dica">Clique para abrir</div>'}
+      <div class="navmod-items">${gs.map(grupoHTML).join('')}</div>
+    </div>`;
+  }).join('') + grupos.filter(g=>!moduloDoGrupo(g.g)).map(grupoHTML).join('');
   const su=document.getElementById('sidebarUsuario'); if(su) su.textContent=USUARIO?('👤 '+(USUARIO.nome||USUARIO.email)+' — '+(PERFIL?PERFIL.nome:'')):'';
 }
 function renderNavBadges(){ renderNav(); }
@@ -1651,6 +1698,8 @@ function render(preservar){
   if(!APP_PRONTO) return;
   const y=window.scrollY;
   const it=MENU_ITENS[currentView]||{r:'',d:''};
+  const mod=moduloDoGrupo(it.grupo); const cr=document.getElementById('pageCrumb');
+  if(cr) cr.textContent=(mod?mod.ic+' '+mod.nome+'  ›  ':'')+(it.grupo||'');
   document.getElementById('pageTitle').textContent=it.r;
   document.getElementById('pageDesc').textContent=it.d||'';
   const v=document.getElementById('view');
@@ -2136,7 +2185,7 @@ async function cadImportar(cadId){
   let regs=[];
   try{
     const buf=await f.arrayBuffer();
-    let txt=new TextDecoder('utf-8').decode(buf); if(txt.includes('�')) txt=new TextDecoder('windows-1252').decode(buf);
+    let txt=new TextDecoder('utf-8').decode(buf); if(txt.includes(' ')) txt=new TextDecoder('windows-1252').decode(buf);
     const linhas=txt.replace(/\r/g,'').split('\n');
     if(cad.tab==='procedimentos' && linhas.filter(l=>/^\d{10}/.test(l) && l.length>=260).length>10){
       /* SIGTAP tb_procedimento.txt (layout fixo): código 1-10, nome 11-260, sexo 262, idade mín 275-278 / máx 279-282 (meses), valores SH/SA/SP 283-318 */
