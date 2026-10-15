@@ -617,10 +617,12 @@ const DOC_CONTADORES = 'contadores';
                              em colunas, "Gestão" e "Mais", busca de telas (Ctrl+K); menu lateral antigo opcional
      1.15.2026  15/10/2026   Busca traz o MÓDULO inteiro (abre o painel com todas as telas) e todas as telas dele;
                              aplicativos integrados com botão próprio na barra quando cabe; caminho no alto abre o módulo
+     1.16.2026  15/10/2026   IMPORTAR TODAS AS TABELAS DO FIORILLI de uma vez (pasta EXPORTA): reconhece as tabelas,
+                             traduz os códigos com as tabelas de apoio e importa tudo na ordem certa
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 15;
+const APP_ALTERACAO = 16;
 const APP_DATA = '2026-10-15';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -6208,9 +6210,9 @@ function impConv(t, v, ctx){
     case 'uf': { const x=norm(s).slice(0,2); return UFS.includes(x) ? x : ''; }
     case 'int': { const n=numBR(s); return n===null ? null : Math.round(n); }
     case 'num': case 'moeda': return numBR(s);
-    case 'sim': { const x=norm(s); if(/^(S|SIM|1|TRUE|X|VERDADEIRO|Y|YES|ATIVO|A)$/.test(x)) return true; if(/^(N|NAO|0|FALSE|F|FALSO|INATIVO|I)$/.test(x)) return false; return undefined; }
+    case 'sim': { const x=norm(s); if(/^(S|SIM|1|T|TRUE|X|VERDADEIRO|Y|YES|ATIVO|A)$/.test(x)) return true;  /* T/F = como o Fiorilli (Delphi) grava */ if(/^(N|NAO|0|FALSE|F|FALSO|INATIVO|I)$/.test(x)) return false; return undefined; }
     case 'cnes': { const d=soDigitos(s); return d.length>=5 && d.length<=7 ? d.padStart(7,'0') : ''; }
-    case 'cbo': return norm(s).replace(/[^A-Z0-9]/g,'').slice(0,6);
+    case 'cbo': return norm(s.split(';')[0]).replace(/[^A-Z0-9]/g,'').slice(0,6);
     case 'sigtap': { const d=soDigitos(s); return d.length===10 ? d : ''; }
     default: return s;
   }
@@ -6317,8 +6319,9 @@ const IMP_ALVOS={
       const uns=[]; const avisos=[];
       const cnesLista=String(r.cnes||'').split(/[;,/|\s]+/).map(c=>impConv('cnes',c)).filter(Boolean);
       cnesLista.forEach(c=>{ const u=impRefPor(ctx,'unidades','cnes',c, r.unidadeNome && cnesLista.length===1 ? {nome:r.unidadeNome, cnes:c, usaTriagem:true} : null); if(u) uns.push(u.id); else avisos.push('CNES '+c+' não cadastrado'); });
-      if(!uns.length && r.unidadeCodigo){ const u=impRefPor(ctx,'unidades','codigoSIS',String(r.unidadeCodigo).trim(),null); if(u) uns.push(u.id); }
-      if(!uns.length && r.unidadeNome){ const u=impRefPor(ctx,'unidades','nome',norm(r.unidadeNome),null); if(u) uns.push(u.id); else avisos.push('unidade "'+r.unidadeNome+'" não cadastrada'); }
+      /* vários códigos ou nomes separados por ";" (lotação em mais de uma unidade) */
+      if(!uns.length && r.unidadeCodigo) String(r.unidadeCodigo).split(';').map(s=>s.trim()).filter(Boolean).forEach(cod=>{ const u=impRefPor(ctx,'unidades','codigoSIS',cod,null); if(u) uns.push(u.id); });
+      if(!uns.length && r.unidadeNome) String(r.unidadeNome).split(';').map(s=>s.trim()).filter(Boolean).forEach(nm=>{ const u=impRefPor(ctx,'unidades','nome',norm(nm),null); if(u) uns.push(u.id); else avisos.push('unidade "'+nm+'" não cadastrada'); });
       if(uns.length) r.unidades=unicos(uns);
       r.tipo=impTipoPorCbo(r.cbo) || 'outro';
       const cons = r.conselho ? (CADS.profissionais.campos.find(c=>c.k==='conselho').op.find(x=>norm(r.conselho).includes(norm(x))) || 'OUTRO') : ((IMP_CBO_CONSELHO.find(x=>String(r.cbo||'').startsWith(x[0]))||[])[1]||'');
@@ -6394,7 +6397,7 @@ const IMP_ALVOS={
     prev:[['sigla','Sigla'],['nome','Exame'],['sigtap','SIGTAP'],['prazoDias','Prazo']]},
 };
 const IMP_FONTES=[
-  {id:'fiorilli', nome:'Fiorilli SIS', ic:'🟦', como:`No SIS, entre em <b>SIS_MENU › Utilitários › Exportar Tabela do Sistema</b>, escolha a tabela (pacientes, profissionais, unidades, bairros...) e salve em <b>.xml</b> ou <b>.txt</b>. Também serve exportar uma lista para Excel, ou selecionar as linhas da grade e copiar (Ctrl+C) para colar aqui. O app reconhece os nomes de campo do SIS (NOME, DATANASCIMENTO, NCARTAO, NMATRICULA, CD_MEDICO, NM_PROF, DE_CBO, CD_UNIDADE, NOMEFANTASIA...).`},
+  {id:'fiorilli', nome:'Fiorilli SIS', ic:'🟦', como:`No SIS, entre em <b>SIS_MENU › Utilitários › Exportar Tabela do Sistema</b>, escolha a tabela (pacientes, profissionais, unidades, bairros...) e salve em <b>.xml</b> ou <b>.txt</b>. Também serve exportar uma lista para Excel, ou selecionar as linhas da grade e copiar (Ctrl+C) para colar aqui. O app reconhece os nomes de campo do SIS (NOME, DATANASCIMENTO, NCARTAO, NMATRICULA, CD_MEDICO, NM_PROF, DE_CBO, CD_UNIDADE, NOMEFANTASIA...). <b>Para trazer todas as tabelas de uma vez, use a aba "Importar todas as tabelas (Fiorilli)", no alto desta tela.</b>`},
   {id:'esus', nome:'e-SUS APS (XML)', ic:'🟩', como:`Use os arquivos <b>.esus.xml</b> ou o <b>.zip do lote</b> que o SIS (ou o e-SUS) gera para enviar ao SISAB — pode escolher vários de uma vez. Cada <b>Cadastro Individual</b> vira um paciente, com as condições de saúde; o <b>Cadastro Domiciliar</b> do mesmo lote completa o endereço da família.`},
   {id:'cnes', nome:'CNES', ic:'🟨', como:`Arquivo <b>XML</b> exportado pelo SCNES (o mesmo que se importa no e-SUS PEC) ou planilha baixada na consulta do site do CNES. Serve para <b>unidades</b> e <b>profissionais</b> (CNS, CBO e unidade). Confira as colunas na etapa 3.`},
   {id:'planilha', nome:'Planilha (Excel/CSV)', ic:'📊', como:`Qualquer planilha com uma linha de títulos: CADSUS, outro sistema, planilha feita à mão. Aceita .xlsx, .xls, .csv e .txt.`},
@@ -6549,22 +6552,35 @@ async function impExecutar(){
   const auxN=Object.values(an.aux).reduce((s,l)=>s+l.length,0);
   if(!novos.length && !comp.length && !auxN){ showToast('Nada novo para importar.','warning'); return; }
   if(!confirm(`Importar ${fmtNum(novos.length)} ${a.titulo.toLowerCase()} novo(s)${comp.length?' e completar '+fmtNum(comp.length)+' cadastro(s) que já existiam (só campos em branco)':''}${auxN?' — e criar '+fmtNum(auxN)+' cadastro(s) de apoio ('+Object.keys(an.aux).map(t=>an.aux[t].length+' '+impNomeTab(t)).join(', ')+')':''}?`)) return;
-  const impId=uid(); const quando=agoraLocal(); const arquivos=IMPX.arquivos.join(', ');
   const prog=document.getElementById('impProg'); const bar=t=>{ if(prog) prog.innerHTML=`<div class="progress"><div style="width:${t[0]}%"></div></div><div class="small muted">${esc(t[1])}</div>`; };
+  try{
+    const g=await impGravar(IMPX.alvo, an, {completar:IMPX.completar, usarMatricula:IMPX.usarMatricula, fonte:IMPX.fonte, arquivos:IMPX.arquivos.join(', '), bar});
+    IMPX.resultado={alvo:IMPX.alvo, novos:g.novos, comp:g.comp, aux:g.aux, sobras:g.sobras, arquivos:g.arquivos};
+    IMPX.an=null; IMPX.filtro=''; render(true);  /* o arquivo continua carregado: dá para importar outro tipo dele (ex.: profissionais do mesmo XML do CNES) */
+  }catch(e){ console.error(e); if(prog) prog.innerHTML=`<div class="alerta-erro">Falha ao gravar: ${esc(msgErro(e))}. O que já foi gravado fica no histórico de importações abaixo.</div>`; }
+}
+/* Grava o que a análise achou (usada pela importação de uma tabela e pela de todas as tabelas de uma vez) */
+async function impGravar(alvo, an, opc){
+  const a=IMP_ALVOS[alvo]; opc=opc||{}; const bar=opc.bar||(()=>{});
+  const novos=an.itens.filter(x=>x.st==='novo').map(x=>x.r);
+  const comp=opc.completar ? an.itens.filter(x=>x.st==='existe').map(x=>impCompletar(x.ex, x.r)).filter(Boolean) : [];
+  const auxN=Object.values(an.aux).reduce((s,l)=>s+l.length,0);
+  const impId=uid(); const quando=agoraLocal(); const arquivos=opc.arquivos||'';
   try{
     for(const t of Object.keys(an.aux)){ bar([5,'Criando '+impNomeTab(t)+'…']); await salvarLote(t, an.aux[t].map(r=>Object.assign({}, r, {importacao:impId}))); }
     novos.forEach(r=>{ r.importacao=impId; if(!r.id) r.id=uid(); });
-    if(a.preparar){ bar([10,'Preparando…']); await a.preparar(novos, {usarMatricula:IMPX.usarMatricula}); }
+    if(a.preparar){ bar([10,'Preparando…']); await a.preparar(novos, {usarMatricula:opc.usarMatricula}); }
     await salvarLote(a.tab, novos.concat(comp), (f,t)=>bar([10+Math.round(f/t*88), fmtNum(f)+' de '+fmtNum(t)+' gravado(s)…']));
     if(a.depois) await a.depois(novos.concat(comp));
     const cont=an.cont;
-    salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo:IMPX.alvo, fonte:IMPX.fonte, arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, existentes:cont.existe||0, repetidos:cont.repetido||0, invalidos:cont.invalido||0, aux:Object.fromEntries(Object.keys(an.aux).map(t=>[t, an.aux[t].length]))});
+    salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo, fonte:opc.fonte||'', arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, existentes:cont.existe||0, repetidos:cont.repetido||0, invalidos:cont.invalido||0, aux:Object.fromEntries(Object.keys(an.aux).map(t=>[t, an.aux[t].length])), lote:opc.lote||''});
     registrarAcao(`Importou ${novos.length} ${a.titulo.toLowerCase()} (e completou ${comp.length}) de ${arquivos}`);
     const sobras=an.itens.filter(x=>x.st!=='novo');
-    IMPX.resultado={alvo:IMPX.alvo, novos:novos.length, comp:comp.length, aux:auxN, sobras:sobras.map(x=>[x.n, ({existe:'já cadastrado',repetido:'repetido no arquivo',invalido:'com problema'})[x.st], x.erro||(x.st==='existe'?(nomeDe(a.tab,x.ex.id)||''):''), (a.prev||[]).map(p=>impFmtPrev(a, p[0], x.r)).join(' | ')]), arquivos};
-    IMPX.an=null; IMPX.filtro=''; render(true);  /* o arquivo continua carregado: dá para importar outro tipo dele (ex.: profissionais do mesmo XML do CNES) */
-  }catch(e){ console.error(e); if(prog) prog.innerHTML=`<div class="alerta-erro">Falha ao gravar: ${esc(msgErro(e))}. O que já foi gravado fica no histórico de importações abaixo.</div>`;
-    try{ salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo:IMPX.alvo, fonte:IMPX.fonte, arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, falhou:msgErro(e)}); }catch(e2){} }
+    return {impId, novos:novos.length, comp:comp.length, aux:auxN, arquivos, sobras:sobras.map(x=>[x.n, ({existe:'já cadastrado',repetido:'repetido no arquivo',invalido:'com problema'})[x.st], x.erro||(x.st==='existe'?(nomeDe(a.tab,x.ex.id)||''):''), (a.prev||[]).map(p=>impFmtPrev(a, p[0], x.r)).join(' | ')])};
+  }catch(e){
+    try{ salvar('importacoes', {id:impId, data:quando, por:usuarioCurto(), alvo, fonte:opc.fonte||'', arquivos, linhas:an.itens.length, novos:novos.length, completados:comp.length, falhou:msgErro(e), lote:opc.lote||''}); }catch(e2){}
+    throw e;
+  }
 }
 function impNomeTab(t){ return ({especialidades:'especialidade(s)', unidades:'unidade(s)', labGrupos:'grupo(s) de exame', labMateriais:'material(is)'})[t]||t; }
 function impRelatorio(){ const R=IMPX.resultado; if(!R) return; exportarExcel('Importação — linhas não incluídas', {nome:'Não incluídas', titulo:'Linhas não incluídas na importação de '+R.arquivos, cab:['Linha do arquivo','Situação','Detalhe','Dados'], linhas:R.sobras}); }
@@ -7017,6 +7033,7 @@ const VERSOES=[
   ['1.13.2026','15/10/2026','APLICATIVOS INTEGRADOS: o CONTROLE DE EXAMES, a COTAÇÃO DE PREÇOS e as AUDIÊNCIAS PÚBLICAS DA SAÚDE viram módulos do PIS — o mesmo aplicativo, com todas as telas, importações, relatórios e backup, agora com os dados no banco do PIS, o login do PIS e as permissões dos Perfis de Acesso (os aplicativos separados continuam funcionando como antes). Cada módulo tem a tela Integração: Exames traz do PIS os laboratórios, clínicas, exames e os lançamentos do mês (laboratório de apoio e exames agendados realizados), lança a N.F. no Financeiro e gera a planilha do laboratório municipal para o Comparativo; Cotações traz fornecedores, produtos e destinos da Farmácia, o estoque/consumo/entradas para os Dados do Fiorilli, gera o pedido de compra na Farmácia a partir da cotação fechada e traz as entregas; Audiências gera as planilhas das áreas com os relatórios do PIS, calcula indicadores e traz a despesa paga do Financeiro. Todos importam os dados do aplicativo original (sem apagar nada).'],
   ['1.14.2026','15/10/2026','MENU PRINCIPAL HORIZONTAL: os módulos ficam numa barra no alto da tela e, ao clicar num módulo, abre um painel com todas as telas dele, os grupos lado a lado em colunas (no módulo que está aberto, a tela atual fica marcada). "Gestão" reúne Faturamento, Financeiro, Controle de Exames, Cotação de Preços e Audiências; o que não couber na largura da tela vai para "Mais". Busca de telas no alto (Ctrl+K: digite parte do nome e Enter). Usuário, troca de senha e saída ficam no círculo com as iniciais, à direita. As telas ganham a largura que era do menu lateral. No celular, o botão ☰ abre o menu de sempre. Quem preferir o menu lateral antigo liga em "Usar o menu lateral" (vale para aquele computador).'],
   ['1.15.2026','15/10/2026','MÓDULO COMPLETO: a busca do alto (Ctrl+K) agora traz primeiro o MÓDULO — ao escolher, abre o painel com todas as telas dele — e, quando a busca é o nome de um módulo (ex.: exames, controle, cotação, audiências, farmácia), lista todas as telas desse módulo, além das outras telas com a palavra; "módulo" lista todos os módulos. Controle de Exames, Cotações e Audiências ganham botão próprio na barra quando a tela é larga (Faturamento e Financeiro ficam em "Gestão"); em telas menores voltam para "Gestão". O nome do módulo no alto de cada tela (MÓDULO … ▾) abre o painel com todas as telas dele, e as telas dos aplicativos integrados têm o botão "Todas as telas do módulo".'],
+  ['1.16.2026','15/10/2026','IMPORTAR TODAS AS TABELAS DO FIORILLI: nova aba em Módulo Menu › Importar de Outros Sistemas. No SIS, exporte as tabelas (Utilitários › Exportar Tabela do Sistema › ≫ › XML › Iniciar) e escolha aqui a pasta EXPORTA: o PIS reconhece cada tabela pelo nome e pelos campos (lê só o começo dos arquivos — as tabelas de movimento, enormes, não são abertas), lê inteiras só as que viram cadastro (unidades, profissionais, funcionários, pacientes, especialidades, convênios, ruas, produtos da farmácia, leitos, raio-X, vigilância, veículos...), traduz os códigos com as tabelas de apoio que vieram junto (bairro, raça, unidade...), junta a lotação e o CBO dos profissionais, mostra por tabela quantos são novos e quantos já existem e importa tudo na ordem certa com um clique. Nada do que já existe é apagado ou trocado; cada tabela fica no histórico e pode ser desfeita. Também: valores T/F do Fiorilli entendidos como sim/não; do CADSOCIAL vêm óbito, inativo, população flutuante e as condições (hipertenso, diabético, gestante, acamado...); a raça segue o código do Fiorilli (3 = amarela, 4 = parda).'],
 ];
 VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
   <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div></div>
@@ -14509,6 +14526,294 @@ function tnAoRedimensionar(){ clearTimeout(TN_RESIZE); TN_RESIZE=setTimeout(()=>
 window.addEventListener('resize', tnAoRedimensionar);
 /* a largura da barra também muda sem 'resize' (zoom, painel do navegador): acompanha a própria barra */
 if(typeof ResizeObserver!=='undefined'){ let tnLarg=0; const ro=new ResizeObserver(en=>{ const w=Math.round(en[0].contentRect.width); if(w && w!==tnLarg){ tnLarg=w; tnAoRedimensionar(); } }); const tn=document.getElementById('topnav'); if(tn) ro.observe(tn); }
+
+/* ============================================================
+   IMPORTAR TODAS AS TABELAS DO FIORILLI DE UMA VEZ (1.16)
+   No SIS: SIS_MENU › Utilitários › Exportar Tabela do Sistema → ≫ (todas) →
+   XML → Iniciar. Os arquivos ficam em C:\FIORILLI\SIS\ARQUIVOS\EXPORTA\ (um por
+   tabela: CADSOCIAL.XML, CADMEDICO.XML...). Aqui o usuário escolhe a pasta (ou
+   os arquivos) e o PIS:
+   • reconhece cada tabela pelo nome e pelos campos (lê só o começo do arquivo —
+     tabelas enormes de movimento não são carregadas);
+   • lê inteiras só as tabelas que viram cadastro no PIS, completa os códigos com
+     as tabelas de apoio que vieram junto (CD_BAIRRO → nome do bairro, CD_RACA →
+     raça, CD_UNIDADE → unidade...) e junta a lotação dos profissionais;
+   • mostra, por tabela, quantos são novos, quantos já existem e quantos têm
+     problema, e importa tudo na ordem certa (unidades → especialidades →
+     profissionais → ... → pacientes), pelo mesmo caminho da importação de uma
+     tabela: nada que já existe é apagado ou trocado, e cada tabela fica no
+     histórico e pode ser desfeita.
+   ============================================================ */
+/* tabela do SIS → cadastro do PIS. Marcada = vem selecionada (nome e campos conferidos). */
+const FIO_TABELAS={
+  CADUNI:'unidades', UNIDADE:'unidades', CADMEDICO:'profissionais', CADFUNC:'funcionarios', CADSOCIAL:'pacientes',
+  ESPECIALIDADES:'especialidades', CONVENIOS:'convenios', RUAS:'logradouros', CADMUN:'municipios',
+  CADEST:'farmaProdutos', DESFOR:'farmaFornecedores', EXAMES:'labExames',
+  LEITO:'hospLeitos', RX_EXAME:'rxExames', VS_ESTABELECIMENTO:'visaEstabelecimentos', VS_TBCNAE:'visaCnae', VS_RESPONSAVEIS:'visaTecnicos',
+  ZOONOSE:'animais', BS_BOLSA:'bsBolsas', VEIC:'veiculos', SAMU_DESTINO:'locais',
+};
+const FIO_MARCADAS=new Set(['CADUNI','CADMEDICO','CADFUNC','CADSOCIAL','ESPECIALIDADES','CONVENIOS','RUAS','CADEST','LEITO','RX_EXAME','VS_ESTABELECIMENTO','VS_TBCNAE','VEIC']);
+/* tabelas "filhas" que completam um cadastro (ligadas pelo código dele): lotação e CBO dos profissionais */
+const FIO_FILHAS={profissionais:['UNIDADE_PROF','UNIDADE_PROF_ESPEC']};
+/* tabelas de apoio conhecidas (traduzem códigos em nomes) — só para a lista do que vale exportar */
+const FIO_APOIO=['RACA','TIPOLOGR','TIPOUNI','CADGRUPO','CADSUBGRUPO','CADLAB','PSICOTROPICO','SETOR','QUARTO_APTO','RX_EXAME_GRUPO','ZOO_ESPECIE','ZOO_RACA','BS_ABORH','BS_TIPO_COMPONENTE','EX_GRUPO','EX_MATERIAIS','NACIONALIDADE','ESTADOS','UNIDADE_PROF','UNIDADE_PROF_ESPEC'];
+const FIO_ORDEM=['unidades','mantenedores','especialidades','profissionais','funcionarios','bairros','logradouros','municipios','convenios','locais','pacientes','medicamentos','labExames','farmaFornecedores','farmaProdutos','hospLeitos','rxExames','visaCnae','visaTecnicos','visaEstabelecimentos','animais','bsBolsas','veiculos','motoristas'];
+function fioOrdem(k){ const i=FIO_ORDEM.indexOf(k); return i<0 ? 100+((IMP_ALVOS[k]||{}).ordem||0) : i; }
+
+/* ---------- nomes de campo do Fiorilli que faltavam nos cadastros ---------- */
+(function(){
+  const add=(alvo, k, sins)=>{ const a=IMP_ALVOS[alvo]; const c=a&&a.campos.find(x=>x.k===k); if(c) sins.forEach(s=>{ if(!c.sin.includes(s)) c.sin.push(s); }); };
+  add('profissionais','registro',['NUMEROCR']); add('profissionais','ufConselho',['UFCR']); add('profissionais','conselho',['TIPCODIGO']); add('profissionais','ativo',['FLG_ATIVO']);
+  add('profissionais','cbo',['CD_CBO_PRINCIPAL','CBO_ESPECIALIDADE']);
+  add('unidades','ativo',['FLG_ATIVO']); add('funcionarios','ativo',['FLG_ATIVO']); add('farmaProdutos','ativo',['FLG_ATIVO']);
+  const p=IMP_ALVOS.pacientes;
+  if(p && !p.campos.some(c=>c.k==='flutuante')) p.campos.push({k:'flutuante', r:'Não reside no município', t:'sim', sin:['FLG_FLUTUANTE','FLUTUANTE']});
+  /* CADSOCIAL do Fiorilli: óbito, inativo, raça (códigos do Fiorilli), condições, município pelo código IBGE */
+  if(p){ const m0=p.montar; p.montar=function(r, o, ctx){ m0.call(this, r, o, ctx); fioPacienteExtras(r, o); }; }
+})();
+/* raça no Fiorilli segue a ordem do IBGE (1 branca, 2 preta, 3 amarela, 4 parda, 5 indígena); no SUS 03 = parda e 04 = amarela.
+   Quando a tabela RACA do Fiorilli vem junto, vale o nome dela. */
+const FIO_RACA={'1':'01','2':'02','3':'04','4':'03','5':'05'};
+function fioPacienteExtras(r, o){
+  if(!o || !('NMATRICULA' in o)) return;   /* só o CADSOCIAL do Fiorilli */
+  const val=k=>String(o[k]===undefined||o[k]===null?'':o[k]).trim().toUpperCase();
+  const sim=k=>/^(T|S|1|SIM)$/.test(val(k));
+  if(sim('OBITO')) r.situacao='obito'; else if(/^(F|N)$/.test(val('ATIVO'))) r.situacao='inativo';
+  if(!val('RACA') && val('CD_RACA')){ const x=FIO_RACA[val('CD_RACA').replace(/^0+/,'')]; if(x) r.raca=x; }
+  const c=new Set(r.condicoes||[]);
+  [['HIPERTENSO','HIPERTENSO'],['DIABETICO','DIABÉTICO'],['GESTANTE','GESTANTE'],['FUMANTE','TABAGISTA'],['SMENTAL','SAÚDE MENTAL'],['CARDIACO','DOENÇA CARDÍACA'],['TUBERCULOSE','TUBERCULOSE'],['HANSENIASE','HANSENÍASE'],['ESUS_ACAMADO','ACAMADO'],['ESUS_DOMICILIADO','DOMICILIADO'],['ESUS_MORADOR_RUA','SITUAÇÃO DE RUA'],['FLG_ALCOOLISMO','USO DE ÁLCOOL'],['FLG_DEP_QUIMICO','USO DE OUTRAS DROGAS'],['ESUS_CANCER','CÂNCER'],['FLG_DPOC','DOENÇA RESPIRATÓRIA'],['ESUS_ASMA','DOENÇA RESPIRATÓRIA'],['OBESO','OBESIDADE']]
+    .forEach(([k,v])=>{ if(sim(k) && CONDICOES.includes(v)) c.add(v); });
+  if(c.size) r.condicoes=[...c];
+  /* CD_MUNICIPIO é o código IBGE: vira o nome (pela tabela de municípios do PIS ou pela cidade da entidade) — nunca fica o número no lugar do nome */
+  const ibge=soDigitos(val('CD_MUNICIPIO'));
+  if(ibge.length>=6 && (!val('MUNICIPIO') || /^\d+$/.test(r.municipio||''))){
+    const m=lista('municipios').find(x=>String(x.ibge||'').slice(0,6)===ibge.slice(0,6));
+    if(m){ r.municipio=String(m.nome||'').toUpperCase(); if(m.uf) r.uf=m.uf; }
+    else if(soDigitos(cfgEnt().ibge||'').slice(0,6)===ibge.slice(0,6)){ r.municipio=String(cfgEnt().cidade||'').toUpperCase(); r.uf=cfgEnt().uf||r.uf; }
+  }
+  if(/^\d+$/.test(r.municipio||'')){ delete r.municipio; delete r.uf; }
+}
+
+/* ---------- leitura dos arquivos ---------- */
+const FLOTE={arquivos:[], lendo:false, msg:'', conferido:false, importando:false, resultado:null, dic:{}, completar:true, usarMatricula:true, verOutras:false};
+function fioTam(n){ n=Number(n)||0; return n>=1048576 ? (n/1048576).toFixed(1).replace('.',',')+' MB' : Math.max(1,Math.round(n/1024))+' KB'; }
+async function fioTexto(file, ate){ const buf=await (ate?file.slice(0,ate):file).arrayBuffer(); return impTexto(buf); }
+function fioCabecalho(txt, nome){
+  const ext=String(nome).split('.').pop().toLowerCase();
+  if(/<DATAPACKET/i.test(txt.slice(0,3000))){
+    const fim=txt.indexOf('</METADATA>'); const meta=fim>0?txt.slice(0,fim):txt;
+    const campos=[], tipos={}; let pk=''; const re=/<FIELD\s+([^>]*?)\/?>/g; let m;
+    while((m=re.exec(meta))){ const at={}; m[1].replace(/([\w]+)="([^"]*)"/g,(_,k,v)=>{ at[k]=v; return ''; }); if(!at.attrname) continue; campos.push(at.attrname); tipos[at.attrname]=at.fieldtype||''; if(!pk && at.required==='true') pk=at.attrname; }
+    return {formato:'datapacket', campos, tipos, pk:pk||campos[0]||''};
+  }
+  if(ext==='xml') return {formato:'xml', campos:[], tipos:{}, pk:''};
+  const l=(txt.split(/\r?\n/).find(x=>x.trim())||''); const d=[';','|','\t',','].sort((a,b)=>l.split(b).length-l.split(a).length)[0];
+  const campos=l.split(d).map(s=>s.trim().replace(/^"|"$/g,'')).filter(Boolean);
+  return {formato:'texto', campos, tipos:{}, pk:campos[0]||''};
+}
+function fioDecod(s){ return s.indexOf('&')<0 ? s : s.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi,(m,e)=>{ const l=e.toLowerCase(); if(l==='amp') return '&'; if(l==='lt') return '<'; if(l==='gt') return '>'; if(l==='quot') return '"'; if(l==='apos') return "'"; const n=l[1]==='x'?parseInt(l.slice(2),16):parseInt(l.slice(1),10); return isNaN(n)?m:String.fromCharCode(n); }); }
+/* lê a tabela inteira: DATAPACKET (XML do Delphi) por expressão regular — bem mais leve que montar o XML todo */
+async function fioLerTabela(f){
+  if(f._t) return f._t;
+  if(f.cab.formato==='datapacket'){
+    const txt=await fioTexto(f.file); const campos=f.cab.campos; const idx=new Map(campos.map((c,i)=>[c,i])); const linhas=[];
+    const re=/<ROW\s([^>]*?)\/>/g, ra=/([\w]+)="([^"]*)"/g; let m;
+    while((m=re.exec(txt))){ const l=new Array(campos.length).fill(''); let a; ra.lastIndex=0; while((a=ra.exec(m[1]))){ const i=idx.get(a[1]); if(i!==undefined) l[i]=fioDecod(a[2]); } linhas.push(l); }
+    f._t={cab:campos.slice(), linhas};
+  } else if(f.cab.formato==='texto'){ const t=await lerPlanilha(f.file); f._t={cab:t.cab.slice(), linhas:t.linhas}; }
+  else throw new Error('formato não reconhecido (exporte em XML)');
+  f.registros=f._t.linhas.length; return f._t;
+}
+function fioPontuar(alvo, campos){
+  const a=IMP_ALVOS[alvo]; if(!a) return {p:0, obrOk:false, achados:[]}; const cab=new Set(campos.map(impCompacto)); let p=0, obrOk=true; const achados=[];
+  a.campos.forEach(c=>{ const ok=c.sin.some(s=>cab.has(impCompacto(s))); if(ok){ p+=c.obr?3:1; achados.push(c.r); } else if(c.obr) obrOk=false; });
+  return {p, obrOk, achados};
+}
+function fioAlvosDisponiveis(){ return Object.entries(IMP_ALVOS).filter(([k,x])=>!x.disponivel||x.disponivel()).sort((x,y)=>fioOrdem(x[0])-fioOrdem(y[0])); }
+async function fioLoteArquivos(ev){
+  const fs=[...(ev.target.files||[])].filter(f=>/\.(xml|txt|csv)$/i.test(f.name)); ev.target.value='';
+  if(!fs.length){ showToast('Nenhum arquivo .XML ou .TXT na seleção.','warning'); return; }
+  Object.assign(FLOTE, {arquivos:[], lendo:true, msg:'Reconhecendo as tabelas…', conferido:false, resultado:null, dic:{}});
+  render(true);
+  try{
+    const vistos=new Set();
+    for(let i=0;i<fs.length;i++){
+      const file=fs[i]; const tabela=file.name.replace(/\.[^.]+$/,'').toUpperCase();
+      const f={file, nome:file.name, tabela, tam:file.size, alvo:'', marcado:false, motivo:'', registros:null, an:null};
+      if(vistos.has(tabela)){ f.motivo='tabela repetida (outro arquivo com o mesmo nome)'; f.repetida=true; FLOTE.arquivos.push(f); continue; }
+      vistos.add(tabela); FLOTE.arquivos.push(f);
+      try{ let txt=await fioTexto(file, 65536); if(/<DATAPACKET/i.test(txt.slice(0,3000)) && txt.indexOf('</METADATA>')<0 && file.size>65536) txt=await fioTexto(file, 1048576); f.cab=fioCabecalho(txt, file.name); }catch(e){ f.cab={formato:'?', campos:[], tipos:{}, pk:''}; f.motivo='não foi possível ler'; }
+      const nomeAlvo=FIO_TABELAS[tabela];
+      if(nomeAlvo && IMP_ALVOS[nomeAlvo] && (!IMP_ALVOS[nomeAlvo].disponivel || IMP_ALVOS[nomeAlvo].disponivel())){
+        const pt=fioPontuar(nomeAlvo, f.cab.campos); f.alvo=nomeAlvo; f.achados=pt.achados;
+        f.marcado=FIO_MARCADAS.has(tabela) && pt.obrOk; if(!pt.obrOk) f.motivo='os campos obrigatórios não foram reconhecidos — confira as colunas';
+      } else if(f.cab.formato==='datapacket' || f.cab.formato==='texto'){
+        /* nome desconhecido: só sugere quando os campos batem bem (não vem marcada) */
+        let melhor=null; fioAlvosDisponiveis().forEach(([k])=>{ const pt=fioPontuar(k, f.cab.campos); if(pt.obrOk && pt.p>=7 && (!melhor || pt.p>melhor.p)) melhor=Object.assign({k}, pt); });
+        if(melhor && f.tam<=60e6){ f.alvo=melhor.k; f.achados=melhor.achados; f.sugestao=true; }
+      } else if(!f.motivo) f.motivo='formato não reconhecido (exporte em XML)';
+      if(i%25===0){ FLOTE.msg=`Reconhecendo as tabelas… ${i+1} de ${fs.length}`; render(true); await new Promise(r=>setTimeout(r,0)); }
+    }
+    FLOTE.lendo=false; render(true);
+    await fioConferir();
+  }catch(e){ console.error(e); showToast('Não foi possível ler os arquivos: '+(e.message||e),'error'); FLOTE.lendo=false; render(true); }
+}
+
+/* ---------- tabelas de apoio (códigos → nomes) e tabelas filhas ---------- */
+function fioCampoDescricao(f, cab){
+  const tipos=(f.cab&&f.cab.tipos)||{}; const pk=f.cab.pk; const texto=c=>!tipos[c] || /string/i.test(tipos[c]);
+  for(const p of ['NOME','NOMEFANTASIA','DESCRICAO','DESCR','RACA','NM_RACA','DE_RACA']){ const i=cab.indexOf(p); if(i>=0 && cab[i]!==pk) return i; }
+  let i=cab.findIndex(c=>c!==pk && /^(DE|DS|NM|NO|DESC|NOME|DESCRICAO)(_|$)/.test(c) && texto(c)); if(i>=0) return i;
+  return cab.findIndex(c=>c!==pk && texto(c) && !/^(CD|FLG|DT|NU|ID)_/.test(c));
+}
+async function fioDicionario(campo, menos){
+  if(FLOTE.dic[campo]!==undefined) return FLOTE.dic[campo];
+  const f=FLOTE.arquivos.find(a=>a!==menos && !a.repetida && a.cab && a.cab.pk===campo && a.tam<=15e6 && a.cab.formato!=='xml');
+  if(!f){ FLOTE.dic[campo]=null; return null; }
+  try{
+    const t=await fioLerTabela(f); const ip=t.cab.indexOf(campo), id=fioCampoDescricao(f, t.cab);
+    if(ip<0 || id<0){ FLOTE.dic[campo]=null; return null; }
+    const m=new Map(); t.linhas.forEach(l=>{ const k=String(l[ip]).trim(); const v=String(l[id]).trim(); if(k && v && !m.has(k)) m.set(k, v); });
+    f.apoio=(f.apoio||[]).concat([campo+' → '+t.cab[id]]); if(!f.alvo) delete f._t;   /* só o dicionário fica na memória */
+    FLOTE.dic[campo]={m, tabela:f.tabela, campo:t.cab[id]}; return FLOTE.dic[campo];
+  }catch(e){ console.error(e); FLOTE.dic[campo]=null; return null; }
+}
+/* monta a tabela que vai para a análise: lê, junta as filhas e traduz os códigos */
+async function fioPreparar(f){
+  if(f._p) return f._p;
+  const t0=await fioLerTabela(f); const t={cab:t0.cab.slice(), linhas:t0.linhas.map(l=>l.slice())};
+  const pk=f.cab.pk, ipk=t.cab.indexOf(pk);
+  /* filhas: cada valor diferente vira "a;b;c" na linha do pai (ex.: as unidades e os CBO de um profissional) */
+  for(const nomeF of (FIO_FILHAS[f.alvo]||[])){
+    const ff=FLOTE.arquivos.find(a=>a.tabela===nomeF && !a.repetida && a.cab && a.tam<=40e6); if(!ff || ipk<0) continue;
+    try{
+      const tf=await fioLerTabela(ff); const j=tf.cab.indexOf(pk); if(j<0) continue;
+      const novas=tf.cab.map((c,k)=>({c,k})).filter(x=>x.k!==j && !t.cab.includes(x.c));
+      const agg=new Map(); tf.linhas.forEach(l=>{ const k=String(l[j]).trim(); if(!k) return; const o=agg.get(k)||{}; novas.forEach(x=>{ const v=String(l[x.k]||'').trim(); if(!v) return; if(!o[x.c]) o[x.c]=v; else if(!o[x.c].split(';').includes(v)) o[x.c]+=';'+v; }); agg.set(k,o); });
+      t.cab=t.cab.concat(novas.map(x=>x.c)); t.linhas.forEach(l=>{ const o=agg.get(String(l[ipk]).trim())||{}; novas.forEach(x=>l.push(o[x.c]||'')); });
+      ff.apoio=(ff.apoio||[]).concat(['completa '+IMP_ALVOS[f.alvo].titulo.toLowerCase()+' ('+novas.map(x=>x.c).slice(0,4).join(', ')+')']);
+    }catch(e){ console.error(e); }
+  }
+  /* códigos → nomes: CD_BAIRRO vira a coluna BAIRRO, CD_RACA vira RACA, CD_UNIDADE vira UNIDADE... */
+  const extras=[];
+  for(let i=0;i<t.cab.length;i++){
+    const c=t.cab[i]; if(!/^CD_/.test(c) || c===pk) continue; const novo=c.replace(/^CD_/,''); if(t.cab.includes(novo) || extras.some(e=>e.nome===novo)) continue;
+    const d=await fioDicionario(c, f); if(d) extras.push({i, nome:novo, d});
+  }
+  if(extras.length){ t.cab=t.cab.concat(extras.map(e=>e.nome)); t.linhas.forEach(l=>extras.forEach(e=>{ const v=String(l[e.i]||''); l.push(v.split(';').map(x=>e.d.m.get(x.trim())||'').filter(Boolean).join(';')); })); f.traduz=extras.map(e=>e.nome+' ('+e.d.tabela+')'); }
+  f._p=t; return t;
+}
+/* a análise é a mesma da importação de uma tabela (IMPX), feita com o estado desta tabela */
+function fioComIMPX(estado, fn){ const salvo={}; Object.keys(estado).forEach(k=>{ salvo[k]=IMPX[k]; IMPX[k]=estado[k]; }); try{ return fn(); } finally{ Object.keys(salvo).forEach(k=>{ IMPX[k]=salvo[k]; }); } }
+function fioAnalisar(f, t){
+  return fioComIMPX({alvo:f.alvo, tabela:t, xml:null, semTitulo:false, esus:false, arquivos:[f.nome], mapa:{}, an:null, anChave:'', filtro:''}, ()=>{ impAutoMapa(); const an=impAnalisar(); return {an, mapa:Object.assign({}, IMPX.mapa)}; });
+}
+async function fioConferir(){
+  const sel=FLOTE.arquivos.filter(f=>f.alvo && !f.repetida).sort((a,b)=>fioOrdem(a.alvo)-fioOrdem(b.alvo));
+  FLOTE.lendo=true; FLOTE.conferido=false;
+  for(let i=0;i<sel.length;i++){
+    const f=sel[i]; if(f.an) continue;
+    FLOTE.msg=`Lendo e comparando com o que já existe: ${f.tabela} (${i+1} de ${sel.length})…`; render(true); await new Promise(r=>setTimeout(r,30));
+    try{ const t=await fioPreparar(f); const x=fioAnalisar(f, t); f.an=x.an; f.mapa=x.mapa; f.erro=''; }
+    catch(e){ console.error(e); f.erro=e.message||String(e); f.marcado=false; }
+  }
+  FLOTE.lendo=false; FLOTE.conferido=true; FLOTE.msg=''; render(true);
+}
+function fioTrocarAlvo(i, alvo){
+  const f=FLOTE.arquivos[i]; if(!f) return; f.alvo=alvo; f.an=null; f._p=null; f.mapa=null;
+  if(!alvo){ f.marcado=false; render(true); return; }
+  const pt=fioPontuar(alvo, f.cab.campos); f.achados=pt.achados; f.marcado=pt.obrOk; f.motivo=pt.obrOk?'':'os campos obrigatórios não foram reconhecidos — confira as colunas';
+  FLOTE.lendo=true; FLOTE.msg='Lendo '+f.tabela+'…'; render(true);
+  (async()=>{ try{ const t=await fioPreparar(f); const x=fioAnalisar(f, t); f.an=x.an; f.mapa=x.mapa; }catch(e){ f.erro=e.message||String(e); f.marcado=false; } FLOTE.lendo=false; FLOTE.msg=''; render(true); })();
+}
+/* abre a tabela na aba "Uma tabela" para conferir/ajustar as colunas (o ajuste fica lembrado e vale aqui também) */
+async function fioVerColunas(i){
+  const f=FLOTE.arquivos[i]; if(!f||!f.alvo) return;
+  try{ const t=await fioPreparar(f); impResetDados(); IMPX.alvo=f.alvo; IMPX.fonte='fiorilli'; IMPX.tabela={cab:t.cab.slice(), linhas:t.linhas}; IMPX.arquivos=[f.nome]; impAutoMapa(); IMPX.aba='uma'; IMPX.voltarLote=true; render(true); window.scrollTo(0,0); }
+  catch(e){ showToast('Não foi possível abrir: '+(e.message||e),'error'); }
+}
+function fioRecontar(){ FLOTE.arquivos.forEach(f=>{ f.an=null; }); fioConferir(); }
+
+/* ---------- importar tudo ---------- */
+async function fioImportarTudo(){
+  if(!isAdmin() && !pode('importacao')){ showToast('Seu perfil não pode importar.','warning'); return; }
+  const sel=FLOTE.arquivos.filter(f=>f.marcado && f.alvo && f.an).sort((a,b)=>fioOrdem(a.alvo)-fioOrdem(b.alvo));
+  if(!sel.length){ showToast('Marque as tabelas que vão ser importadas.','warning'); return; }
+  const semPerm=sel.filter(f=>!isAdmin() && !pode(IMP_ALVOS[f.alvo].view)); if(semPerm.length){ showToast('Seu perfil não pode incluir em: '+semPerm.map(f=>IMP_ALVOS[f.alvo].titulo).join(', ')+'.','warning'); return; }
+  const tot=sel.reduce((s,f)=>s+(f.an.cont.novo||0),0);
+  const txt=sel.map(f=>`• ${f.tabela} → ${IMP_ALVOS[f.alvo].titulo}: ${fmtNum(f.an.cont.novo||0)} novo(s)${FLOTE.completar&&f.an.itens.some(x=>x.completa)?', completa '+fmtNum(f.an.itens.filter(x=>x.completa).length):''}`).join('\n');
+  if(!confirm(`Importar ${sel.length} tabela(s) do Fiorilli, nesta ordem?\n\n${txt}\n\nNada do que já existe é apagado ou trocado${FLOTE.completar?' (quem já existe só ganha os campos em branco)':''}. Cada tabela fica no histórico e pode ser desfeita.`)) return;
+  const lote=uid(); FLOTE.importando=true; FLOTE.resultado={lote, itens:[]}; render(true);
+  for(let i=0;i<sel.length;i++){
+    const f=sel[i]; const a=IMP_ALVOS[f.alvo];
+    const bar=b=>{ const el=document.getElementById('fioProg'); if(el) el.innerHTML=`<div class="small"><b>${i+1} de ${sel.length}: ${esc(f.tabela)} → ${esc(a.titulo)}</b></div><div class="progress"><div style="width:${b[0]}%"></div></div><div class="small muted">${esc(b[1])}</div>`; };
+    bar([1,'Comparando com o que já existe…']); await new Promise(r=>setTimeout(r,30));
+    try{
+      const x=fioAnalisar(f, await fioPreparar(f));   /* de novo: o que foi gravado antes (ex.: unidades) já conta */
+      const g=await impGravar(f.alvo, x.an, {completar:FLOTE.completar, usarMatricula:FLOTE.usarMatricula, fonte:'fiorilli', arquivos:f.nome+' (todas as tabelas)', lote, bar});
+      FLOTE.resultado.itens.push({tabela:f.tabela, alvo:f.alvo, novos:g.novos, comp:g.comp, aux:g.aux, sobras:g.sobras});
+    }catch(e){ console.error(e); FLOTE.resultado.itens.push({tabela:f.tabela, alvo:f.alvo, erro:msgErro(e)}); }
+  }
+  registrarAcao('Importou do Fiorilli (todas as tabelas): '+FLOTE.resultado.itens.map(r=>r.tabela+(r.erro?' (falhou)':' +'+r.novos)).join(', '));
+  FLOTE.importando=false; FLOTE.arquivos.forEach(f=>{ f.an=null; f._p=null; if(f.tam>5e6) f._t=null; }); FLOTE.conferido=false;
+  render(true); window.scrollTo(0,0);
+}
+function fioRelatorioSobras(){
+  const R=FLOTE.resultado; if(!R) return; const abas=R.itens.filter(x=>x.sobras&&x.sobras.length).map(x=>({nome:x.tabela.slice(0,31), titulo:'Linhas não incluídas — '+x.tabela+' → '+IMP_ALVOS[x.alvo].titulo, cab:['Linha do arquivo','Situação','Detalhe','Dados'], linhas:x.sobras}));
+  if(!abas.length){ showToast('Todas as linhas foram incluídas.','success'); return; } exportarExcel('Importação do Fiorilli — linhas não incluídas', abas);
+}
+
+/* ---------- tela ---------- */
+function fioLoteHTML(){
+  const L=FLOTE; const vai=L.arquivos.filter(f=>f.alvo && !f.repetida), apoio=L.arquivos.filter(f=>!f.alvo && f.apoio), outras=L.arquivos.filter(f=>!f.alvo && !f.apoio);
+  const alvos=fioAlvosDisponiveis();
+  let h=`<div class="card"><h2>1. Gere as tabelas no Fiorilli e escolha a pasta</h2>
+    <ol class="small" style="line-height:1.8;margin:0 0 10px;padding-left:20px;"><li>No SIS, entre em <b>SIS_MENU › Utilitários › Exportar Tabela do Sistema</b>.</li><li>Clique em <b>≫</b> (passa todas as tabelas) — ou só nas tabelas que o PIS usa (lista abaixo), que é bem mais rápido.</li><li>Marque <b>Exportar em: XML</b> e clique em <b>Iniciar</b>. Os arquivos ficam em <code>C:\\FIORILLI\\SIS\\ARQUIVOS\\EXPORTA\\</code> (um por tabela).</li><li>Aqui, escolha a <b>pasta EXPORTA</b> (o navegador pergunta se pode ler os arquivos — eles <b>não</b> saem do computador) ou selecione os arquivos.</li></ol>
+    <div class="actions"><label class="btn">📁 Escolher a pasta EXPORTA<input type="file" webkitdirectory directory multiple style="display:none;" onchange="fioLoteArquivos(event)"></label><label class="btn secondary">📄 Escolher os arquivos<input type="file" multiple accept=".xml,.txt,.csv" style="display:none;" onchange="fioLoteArquivos(event)"></label></div>
+    <details class="mt"><summary class="small" style="cursor:pointer;">Tabelas do Fiorilli que o PIS usa</summary><div class="small muted mt">Viram cadastro: ${Object.keys(FIO_TABELAS).map(t=>`<b>${t}</b> (${esc((IMP_ALVOS[FIO_TABELAS[t]]||{titulo:'?'}).titulo.toLowerCase())})`).join(', ')}.<br>Ajudam (traduzem códigos e completam): ${FIO_APOIO.join(', ')}. As outras tabelas são deixadas de lado sem ser abertas.</div></details>
+    ${L.lendo?`<div class="mt"><span class="spinner"></span> ${esc(L.msg||'Lendo…')}</div>`:''}</div>`;
+  if(L.resultado && !L.importando){
+    const R=L.resultado; const n=R.itens.reduce((s,x)=>s+(x.novos||0),0), c=R.itens.reduce((s,x)=>s+(x.comp||0),0), falhas=R.itens.filter(x=>x.erro);
+    h+=`<div class="card"><div class="${falhas.length?'alerta-aviso':'alerta-ok'}">${falhas.length?'⚠️':'✅'} Importação do Fiorilli concluída: <b>${fmtNum(n)}</b> cadastro(s) incluído(s)${c?' e <b>'+fmtNum(c)+'</b> completado(s)':''} em ${R.itens.length} tabela(s)${falhas.length?' — '+falhas.length+' tabela(s) com falha':''}.</div>
+      ${tabelaHTML(['Tabela do SIS','Cadastro no PIS','Incluídos','Completados','Cadastros de apoio','Situação'], R.itens.map(x=>[esc(x.tabela), esc((IMP_ALVOS[x.alvo]||{titulo:x.alvo}).titulo), fmtNum(x.novos||0), fmtNum(x.comp||0), fmtNum(x.aux||0), x.erro?`<span class="badge ruim">falhou: ${esc(x.erro)}</span>`:'<span class="badge ok">ok</span>']), {html:true, num:[2,3,4]})}
+      <div class="actions mt"><button class="btn secondary" onclick="fioRelatorioSobras()">⭳ Linhas não incluídas (Excel, uma aba por tabela)</button><span class="small muted">Para desfazer uma tabela, use o histórico abaixo.</span></div></div>`;
+  }
+  if(!L.arquivos.length) return h+impHistoricoHTML(null);
+  const stB=f=>{ if(f.erro) return `<span class="badge ruim">${esc(f.erro)}</span>`; if(!f.an) return L.lendo?'<span class="muted small">…</span>':'<span class="muted small">—</span>'; const c=f.an.cont; const comp=f.an.itens.filter(x=>x.completa).length;
+    return `<span class="badge ok">${fmtNum(c.novo||0)} novo(s)</span> <span class="badge azul">${fmtNum(c.existe||0)} já existe(m)${L.completar&&comp?' · completa '+fmtNum(comp):''}</span>${c.repetido?` <span class="badge ambar">${fmtNum(c.repetido)} repetido(s)</span>`:''}${c.invalido?` <span class="badge ruim">${fmtNum(c.invalido)} com problema</span>`:''}${Object.keys(f.an.aux).length?`<div class="small muted">cria também: ${Object.keys(f.an.aux).map(t=>fmtNum(f.an.aux[t].length)+' '+impNomeTab(t)).join(', ')}</div>`:''}`; };
+  const ordem=vai.slice().sort((a,b)=>fioOrdem(a.alvo)-fioOrdem(b.alvo));
+  const idx=f=>L.arquivos.indexOf(f);
+  h+=`<div class="card"><h2>2. O que vai para o PIS (${vai.length} tabela(s) de ${L.arquivos.length} arquivo(s))</h2>
+    <div class="subtitle">Importação na ordem da lista. Tabela com nome conhecido e campos conferidos já vem marcada; "sugestão" é tabela com outro nome cujos campos parecem um cadastro do PIS — confira antes de marcar.</div>
+    <div class="table-wrap"><table><thead><tr><th></th><th>Tabela do SIS</th><th>Vai para</th><th>Registros</th><th>Comparação com o que já existe</th><th></th></tr></thead><tbody>
+    ${ordem.map(f=>{ const i=idx(f); return `<tr><td><input type="checkbox" ${f.marcado?'checked':''} ${f.an?'':'disabled'} onchange="FLOTE.arquivos[${i}].marcado=this.checked;render(true)"></td>
+      <td><b>${esc(f.tabela)}</b>${f.sugestao?' <span class="badge ambar">sugestão</span>':''}<div class="small muted">${esc(f.nome)} · ${fioTam(f.tam)}</div>${f.traduz?`<div class="small muted">códigos traduzidos: ${esc(f.traduz.join(', '))}</div>`:''}${f.motivo?`<div class="small" style="color:var(--amber);">${esc(f.motivo)}</div>`:''}</td>
+      <td><select class="inp" style="width:auto;" onchange="fioTrocarAlvo(${i}, this.value)"><option value="">— não importar —</option>${alvos.map(([k,x])=>`<option value="${k}" ${f.alvo===k?'selected':''}>${x.ic} ${esc(x.titulo)}</option>`).join('')}</select></td>
+      <td class="num">${f.registros===null?'—':fmtNum(f.registros)}</td><td>${stB(f)}</td>
+      <td>${f.an?`<button class="btn ghost small" onclick="fioVerColunas(${i})" title="Abre esta tabela na aba Uma tabela: colunas reconhecidas e prévia linha a linha">🔍 colunas</button>`:''}</td></tr>`; }).join('')||'<tr class="empty-row"><td colspan="6">Nenhuma tabela reconhecida como cadastro do PIS.</td></tr>'}</tbody></table></div>
+    ${apoio.length?`<div class="small mt"><b>Tabelas de apoio usadas:</b> ${apoio.map(f=>`${esc(f.tabela)} <span class="muted">(${esc((f.apoio||[]).join('; '))})</span>`).join(' · ')}</div>`:''}
+    ${outras.length?`<details class="mt" ${L.verOutras?'open':''} ontoggle="FLOTE.verOutras=this.open"><summary class="small" style="cursor:pointer;">${outras.length} tabela(s) não usada(s) pelo PIS (não foram abertas)</summary><div class="small muted mt">${outras.map(f=>esc(f.tabela)+(f.motivo?' ('+esc(f.motivo)+')':'')).join(', ')}</div></details>`:''}
+    <div class="actions mt"><label class="check small"><input type="checkbox" ${L.completar?'checked':''} onchange="FLOTE.completar=this.checked;render(true)"> completar os campos em branco de quem já está cadastrado (nunca troca o que já está preenchido)</label>
+      <label class="check small"><input type="checkbox" ${L.usarMatricula?'checked':''} onchange="FLOTE.usarMatricula=this.checked"> pacientes: manter a matrícula do SIS quando estiver livre</label>
+      <button class="btn ghost small" onclick="fioRecontar()" ${L.lendo||L.importando?'disabled':''}>↻ comparar de novo</button></div></div>`;
+  const sel=L.arquivos.filter(f=>f.marcado && f.alvo && f.an); const nNovos=sel.reduce((s,f)=>s+(f.an.cont.novo||0),0); const nComp=L.completar?sel.reduce((s,f)=>s+f.an.itens.filter(x=>x.completa).length,0):0;
+  h+=`<div class="card"><h2>3. Importar</h2>
+    <div class="actions"><button class="btn big" onclick="fioImportarTudo()" ${!sel.length||L.lendo||L.importando||(!nNovos&&!nComp&&!sel.some(f=>Object.keys(f.an.aux).length))?'disabled':''}>📥 Importar ${sel.length} tabela(s): ${fmtNum(nNovos)} novo(s)${nComp?' e completar '+fmtNum(nComp):''}</button>
+    <button class="btn ghost" onclick="Object.assign(FLOTE,{arquivos:[],resultado:null,dic:{},conferido:false});render(true)" ${L.importando?'disabled':''}>Fechar os arquivos</button></div>
+    <div id="fioProg" class="mt">${L.importando?'<span class="spinner"></span> Importando…':''}</div></div>`;
+  return h+impHistoricoHTML(null);
+}
+/* abas na tela Importar de Outros Sistemas */
+(function(){
+  if(typeof IMPX!=='undefined' && IMPX.aba===undefined) IMPX.aba='uma';
+  const v0=VIEWS.importacao;
+  VIEWS.importacao=()=>{
+    const abas=`<div class="tabs"><div class="tab ${IMPX.aba!=='todas'?'active':''}" onclick="IMPX.aba='uma';render(true)">📄 Uma tabela</div><div class="tab ${IMPX.aba==='todas'?'active':''}" onclick="IMPX.aba='todas';render(true)">🗂️ Importar todas as tabelas (Fiorilli)</div></div>`;
+    if(IMPX.aba==='todas') return abas+`<div class="helpbox">Traz de uma vez todas as tabelas que o Fiorilli SIS exporta: o PIS acha sozinho as que viram cadastro (unidades, profissionais, pacientes, produtos da farmácia...), usa as de apoio para traduzir os códigos e importa na ordem certa. <b>Nada do que já existe é apagado ou trocado</b> — como na importação de uma tabela.</div>`+fioLoteHTML();
+    const volta=IMPX.voltarLote&&FLOTE.arquivos.length?`<div class="alerta-aviso">Você abriu uma tabela da importação de todas as tabelas para conferir as colunas. O que ajustar aqui fica lembrado. <button class="btn small" onclick="IMPX.aba='todas';IMPX.voltarLote=false;fioRecontar();render(true)">← voltar para todas as tabelas</button></div>`:'';
+    return abas+volta+v0();
+  };
+})();
 
 </script>
 </body>
