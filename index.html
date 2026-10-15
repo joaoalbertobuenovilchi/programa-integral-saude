@@ -615,10 +615,12 @@ const DOC_CONTADORES = 'contadores';
                              PIS), trazem as informações dos outros módulos e importam o aplicativo original
      1.14.2026  15/10/2026   MENU PRINCIPAL HORIZONTAL: módulos numa barra no alto, painel com as telas do módulo
                              em colunas, "Gestão" e "Mais", busca de telas (Ctrl+K); menu lateral antigo opcional
+     1.15.2026  15/10/2026   Busca traz o MÓDULO inteiro (abre o painel com todas as telas) e todas as telas dele;
+                             aplicativos integrados com botão próprio na barra quando cabe; caminho no alto abre o módulo
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 14;
+const APP_ALTERACAO = 15;
 const APP_DATA = '2026-10-15';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -7014,6 +7016,7 @@ const VERSOES=[
   ['1.12.2026','15/10/2026','ODONTOLOGIA (Consultório Odontológico do SIS): a ficha do cirurgião-dentista ganha as abas Odontograma (características de cada dente com as siglas do SIS, dentição permanente/mista/decídua, prótese total, procedimentos por dente e faces, sextante, arcada ou boca toda, histórico por dente) e Saúde bucal (complemento e-SUS); tela própria com a fila, o odontograma do paciente e 3 relatórios (produção, indicadores de saúde bucal, vigilância). SAMU (Atendimento Sistematizado do SIS): ficha do atendimento pré-hospitalar com chamado, classe de risco, local, viatura, horários e tempo-resposta, km, destino, sinais vitais, CID e procedimentos para o BPA; 3 relatórios. RAAS (Produção Psicossocial do SIS): admissão do usuário no CAPS, ações do mês (lançadas ou trazidas das fichas) e Fechamento e Exportação RAAS no Faturamento, com o arquivo no layout oficial do DATASUS (abril/2025). Faturamento das viagens passa a contar o km de ida e volta.'],
   ['1.13.2026','15/10/2026','APLICATIVOS INTEGRADOS: o CONTROLE DE EXAMES, a COTAÇÃO DE PREÇOS e as AUDIÊNCIAS PÚBLICAS DA SAÚDE viram módulos do PIS — o mesmo aplicativo, com todas as telas, importações, relatórios e backup, agora com os dados no banco do PIS, o login do PIS e as permissões dos Perfis de Acesso (os aplicativos separados continuam funcionando como antes). Cada módulo tem a tela Integração: Exames traz do PIS os laboratórios, clínicas, exames e os lançamentos do mês (laboratório de apoio e exames agendados realizados), lança a N.F. no Financeiro e gera a planilha do laboratório municipal para o Comparativo; Cotações traz fornecedores, produtos e destinos da Farmácia, o estoque/consumo/entradas para os Dados do Fiorilli, gera o pedido de compra na Farmácia a partir da cotação fechada e traz as entregas; Audiências gera as planilhas das áreas com os relatórios do PIS, calcula indicadores e traz a despesa paga do Financeiro. Todos importam os dados do aplicativo original (sem apagar nada).'],
   ['1.14.2026','15/10/2026','MENU PRINCIPAL HORIZONTAL: os módulos ficam numa barra no alto da tela e, ao clicar num módulo, abre um painel com todas as telas dele, os grupos lado a lado em colunas (no módulo que está aberto, a tela atual fica marcada). "Gestão" reúne Faturamento, Financeiro, Controle de Exames, Cotação de Preços e Audiências; o que não couber na largura da tela vai para "Mais". Busca de telas no alto (Ctrl+K: digite parte do nome e Enter). Usuário, troca de senha e saída ficam no círculo com as iniciais, à direita. As telas ganham a largura que era do menu lateral. No celular, o botão ☰ abre o menu de sempre. Quem preferir o menu lateral antigo liga em "Usar o menu lateral" (vale para aquele computador).'],
+  ['1.15.2026','15/10/2026','MÓDULO COMPLETO: a busca do alto (Ctrl+K) agora traz primeiro o MÓDULO — ao escolher, abre o painel com todas as telas dele — e, quando a busca é o nome de um módulo (ex.: exames, controle, cotação, audiências, farmácia), lista todas as telas desse módulo, além das outras telas com a palavra; "módulo" lista todos os módulos. Controle de Exames, Cotações e Audiências ganham botão próprio na barra quando a tela é larga (Faturamento e Financeiro ficam em "Gestão"); em telas menores voltam para "Gestão". O nome do módulo no alto de cada tela (MÓDULO … ▾) abre o painel com todas as telas dele, e as telas dos aplicativos integrados têm o botão "Todas as telas do módulo".'],
 ];
 VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
   <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div></div>
@@ -13446,7 +13449,7 @@ function appBarraHTML(id){
   const st=rt.erro?`<div class="alerta-erro">Não foi possível abrir o módulo: ${esc(msgErro(rt.erro))} <button class="btn small secondary" onclick="appRecarregar('${app}')">tentar de novo</button></div>`
     : !rt.w ? `<span class="muted small">⏳ Abrindo o ${esc(APPS_DEF[app].curto)}…${rt.lento?' (está demorando — confira a internet; as bibliotecas de planilha e gráfico vêm da internet)':''}</span>` : '';
   const extra=rt.w && APPS_INT[app] && APPS_INT[app].barra ? APPS_INT[app].barra(id) : '';
-  return `<div class="app-barra">${st}${extra}<span style="flex:1"></span>${podeVer(app+'_integracao')?`<button class="btn ghost small" onclick="goto('${app}_integracao')" title="Trazer dados dos outros módulos do PIS e importar o aplicativo original">🔗 Integração com o PIS</button>`:''}</div>`;
+  return `<div class="app-barra">${st}${extra}<span style="flex:1"></span>${typeof tnAbrirModulo==='function'?`<button class="btn ghost small" onclick="tnAbrirModulo('app_${app}')" title="Abre o painel com todas as telas deste módulo">📋 Todas as telas do ${esc(APPS_DEF[app].curto)}</button>`:''}${podeVer(app+'_integracao')?`<button class="btn ghost small" onclick="goto('${app}_integracao')" title="Trazer dados dos outros módulos do PIS e importar o aplicativo original">🔗 Integração com o PIS</button>`:''}</div>`;
 }
 Object.keys(APPS_MAPA).forEach(id=>{
   const M=APPS_MAPA[id];
@@ -14224,7 +14227,7 @@ APPS_INT.aud={
    ============================================================ */
 const TN_GESTAO=['fat','fin','app_exa','app_cot','app_aud'];
 const TN_FIXOS=['menu','amb'];
-const TN_ROTULO={menu:'Menu', amb:'Ambulatório', lab:'Laboratório', farma:'Farmácia', hosp:'Hospital', fat:'Faturamento', rx:'Raio-X', vz:'Vigilância', bs:'Banco de Sangue', tr:'Transporte', fin:'Financeiro', app_exa:'Controle de Exames', app_cot:'Cotação de Preços', app_aud:'Audiências', outros:'Outras telas'};
+const TN_ROTULO={menu:'Menu', amb:'Ambulatório', lab:'Laboratório', farma:'Farmácia', hosp:'Hospital', fat:'Faturamento', rx:'Raio-X', vz:'Vigilância', bs:'Banco de Sangue', tr:'Transporte', fin:'Financeiro', app_exa:'Controle de Exames', app_cot:'Cotações', app_aud:'Audiências', outros:'Outras telas'};
 const TN_ESTILO_KEY='pis_menu_estilo';
 const TN={aberto:null, sel:null, ent:[], mods:[], badges:{}, assin:'', timer:null, res:[], resSel:0};
 function tnLateral(){ try{ return localStorage.getItem(TN_ESTILO_KEY)==='lateral'; }catch(e){ return false; } }
@@ -14276,12 +14279,17 @@ body:not(.menu-lateral) .demo-banner{top:auto;bottom:24px;border-radius:8px 8px 
 .tn-busca input:focus{background:#fff;color:var(--ink);}
 .tn-lupa{position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:13px;pointer-events:none;}
 .tn-res,.tn-umenu{display:none;position:absolute;right:0;top:calc(100% + 8px);background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.2);padding:6px;z-index:5;}
-.tn-res{width:390px;max-height:70vh;overflow:auto;}
+.tn-res{width:430px;max-height:72vh;overflow:auto;}
 .tn-res.aberto,.tn-umenu.aberto{display:block;}
 .tn-ritem{display:flex;gap:10px;align-items:center;padding:7px 10px;border-radius:8px;cursor:pointer;text-decoration:none;color:var(--ink);font-size:13px;}
 .tn-ritem small{display:block;font-size:11px;color:var(--ink-soft);font-weight:400;}
 .tn-ritem.sel,.tn-ritem:hover{background:var(--teal-soft);}
 .tn-rvazio{padding:10px;font-size:12.5px;color:var(--ink-soft);}
+.tn-rcab{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--teal);padding:9px 10px 4px;}
+.tn-rmod{border:1px solid var(--line);margin:2px 0;background:#FAFCFB;}
+.tn-rmod b{color:var(--teal-dark);font-size:12.5px;letter-spacing:.04em;}
+.tn-crumb-mod{color:inherit;text-decoration:none;border-bottom:1px dashed currentColor;cursor:pointer;}
+.tn-crumb-mod:hover{color:var(--teal-dark);border-bottom-style:solid;}
 .tn-user{position:relative;flex:0 0 auto;}
 .tn-ubtn{width:34px;height:34px;border-radius:50%;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.16);color:#fff;font-weight:800;font-size:12px;cursor:pointer;}
 .tn-umenu{width:280px;padding:10px;}
@@ -14340,15 +14348,21 @@ function tnBotaoHTML(e){
   const ativo=e.mods.some(x=>x.m.id===tnModAtivo()); const b=e.mods.reduce((s,x)=>s+(TN.badges[x.m.id]||0),0);
   return `<button type="button" class="tn-mod ${ativo?'ativo':''} ${TN.aberto===e.k?'aberto':''}" data-k="${e.k}" aria-haspopup="true" aria-expanded="${TN.aberto===e.k}" onclick="tnClicar('${e.k}')" onmouseenter="tnPassar('${e.k}')" onmouseleave="clearTimeout(TN.timer)" title="${esc(e.mods.map(x=>tnRotulo(x.m)).join(', '))}"><span class="tn-icw ${b?'com':''}">${e.ic}${b?`<span class="tn-bdg">${b>99?'99+':b}</span>`:''}</span><span>${esc(e.rot)}</span></button>`;
 }
+/* Cabe tudo? Cada módulo com o seu botão. Não cabe? 1º junta Faturamento e Financeiro em "Gestão"
+   (os aplicativos integrados continuam com botão próprio); 2º junta também os aplicativos; 3º o que
+   ainda sobrar vai para "Mais". */
 function tnMontarBarra(){
   const nav=document.getElementById('tnMods'); if(!nav) return; const mods=TN.mods;
+  const item=x=>({k:x.m.id, rot:tnRotulo(x.m), ic:x.m.ic, mods:[x]});
+  const grupo=l=>l.length>1?[{k:'gestao', rot:'Gestão', ic:'💼', mods:l}]:l.map(item);
   const gest=mods.filter(x=>TN_GESTAO.includes(x.m.id)), sing=mods.filter(x=>!TN_GESTAO.includes(x.m.id));
-  const ent=sing.map(x=>({k:x.m.id, rot:tnRotulo(x.m), ic:x.m.ic, mods:[x]}));
-  if(gest.length>1) ent.push({k:'gestao', rot:'Gestão', ic:'💼', mods:gest}); else if(gest.length) ent.push({k:gest[0].m.id, rot:tnRotulo(gest[0].m), ic:gest[0].m.ic, mods:gest});
-  let mais=[];
+  const apps=gest.filter(x=>/^app_/.test(x.m.id)), fatFin=gest.filter(x=>!/^app_/.test(x.m.id));
+  const etapas=[mods.map(item), sing.map(item).concat(grupo(fatFin), apps.map(item)), sing.map(item).concat(grupo(gest))];
+  let ent=etapas[0], mais=[];
   const desenhar=()=>{ TN.ent=ent.concat(mais.length?[{k:'mais', rot:'Mais', ic:'⋯', mods:mais.flatMap(e=>e.mods)}]:[]); nav.innerHTML=TN.ent.map(tnBotaoHTML).join(''); };
   desenhar();
   if(nav.offsetParent!==null){
+    for(let i=1;i<etapas.length && nav.scrollWidth>nav.clientWidth+1;i++){ ent=etapas[i]; desenhar(); }
     let n=0;
     while(nav.scrollWidth>nav.clientWidth+1 && n++<40){
       let i=-1; for(let j=ent.length-1;j>=0;j--){ if(!TN_FIXOS.includes(ent[j].k) && ent[j].k!=='gestao'){ i=j; break; } }
@@ -14362,7 +14376,7 @@ function tnRender(){
   if(!document.getElementById('tnMods') || !USUARIO) return;
   const mods=tnModulos(); const ativo=tnModAtivo(); const badges=mods.map(tnBadgeMod);
   TN.mods=mods; TN.badges=Object.fromEntries(mods.map((x,i)=>[x.m.id, badges[i]]));
-  tnTopoInfo();
+  tnTopoInfo(); tnCaminho();
   const assin=JSON.stringify([mods.map(x=>x.m.id+':'+x.grupos.reduce((s,g)=>s+g.itens.length,0)), badges, ativo, (document.getElementById('topnav')||{}).offsetWidth||window.innerWidth, (PERFIL||{}).id, tnLateral()]);
   if(assin===TN.assin) return;
   TN.assin=assin; if(tnLateral()) return;
@@ -14396,26 +14410,61 @@ function tnPainelRender(){
   p.classList.add('aberto');
 }
 function tnIr(id){ tnFechar(); tnBuscaFechar(); goto(id); }
+/* abre o painel com TODAS as telas de um módulo (busca, caminho no alto da tela, botões das telas) */
+function tnAbrirModulo(modId){
+  tnBuscaFechar(); tnUsuarioFechar();
+  const e=TN.ent.find(x=>x.mods.some(z=>z.m.id===modId));
+  if(tnLateral() || !e || document.getElementById('tnMods').offsetParent===null){
+    /* menu lateral (ou celular): abre o módulo no menu lateral */
+    try{ const a=navModulosSet(); if(!a.has(modId)){ a.add(modId); localStorage.setItem(NAV_MODULOS_KEY, JSON.stringify([...a])); } }catch(x){}
+    renderNav(); if(!tnLateral() || window.innerWidth<=760) toggleSidebar(); return;
+  }
+  tnAbrir(e.k); TN.sel=modId; tnPainelRender();
+}
+/* "MÓDULO X › grupo" no alto da tela: o nome do módulo abre o painel com todas as telas dele */
+function tnCaminho(){
+  const cr=document.getElementById('pageCrumb'); const it=MENU_ITENS[currentView]; if(!cr || !it) return;
+  const m=moduloDoGrupo(it.grupo); if(!m) return;
+  if(cr.dataset.v===currentView+'|'+m.id && cr.querySelector('.tn-crumb-mod')) return;
+  cr.dataset.v=currentView+'|'+m.id;
+  cr.innerHTML=`<a class="tn-crumb-mod" href="#" onclick="tnAbrirModulo('${m.id}');return false;" title="Ver todas as telas do ${esc(tnRotulo(m))}">${m.ic} ${esc(m.nome)} ▾</a>  ›  ${esc(it.grupo||'')}`;
+}
 
 /* ---------- busca de telas ---------- */
+/* Busca: primeiro os MÓDULOS (abrem o painel com todas as telas) e, quando a busca é o nome de um ou dois
+   módulos, todas as telas deles; depois as outras telas que têm a palavra. */
+const TN_APELIDOS={app_exa:'controle-exames controle de exames laboratoriais exames de imagem laboratorios clinicas operadoras glosas', app_cot:'controle-cotacoes cotacao cotacoes de precos compras', app_aud:'audiencias-saude audiencia publica audiencias publicas quadrimestre', fat:'faturamento bpa aih sia sih apac raas', fin:'financeiro contas a pagar receber', menu:'menu cadastros gerais sistema usuarios', amb:'ambulatorio consultas', lab:'laboratorio', farma:'farmacia medicamentos estoque', hosp:'hospital internacao leitos', rx:'raio-x raio x radiologia', vz:'vigilancia sanitaria zoonoses epidemiologica', bs:'banco de sangue hemoterapia', tr:'transporte tfd viagens'};
 function tnBuscar(v){
   const t=norm(v); if(!t){ tnBuscaFechar(); return; } tnFechar(); tnUsuarioFechar();
-  const tk=t.split(' ').filter(Boolean); const l=[];
-  MENU.forEach(g=>g.itens.forEach(it=>{ if(!podeVer(it.id)) return; const m=moduloDoGrupo(g.g); const r=norm(it.r); const txt=norm(it.r+' '+g.g+' '+(m?tnRotulo(m):'')+' '+(it.d||''));
-    if(tk.every(k=>txt.includes(k))) l.push({it, g, m, peso:r.startsWith(tk[0])?0:(tk.every(k=>r.includes(k))?1:2)}); }));
+  const tk=t.split(' ').filter(Boolean); const res=[]; const ja=new Set();
+  const mods=(TN.mods||[]).filter(x=>{ const txt=norm(x.m.nome+' '+tnRotulo(x.m)+' '+(TN_APELIDOS[x.m.id]||'')); return tk.every(k=>txt.includes(k)); });
+  mods.forEach((x,i)=>res.push({tipo:'mod', x, cab:i===0?(mods.length>1?'Módulos':'Módulo'):''}));
+  if(mods.length && mods.length<=2) mods.forEach(x=>{ let pri=true; x.grupos.forEach(g=>g.itens.forEach(it=>{ ja.add(it.id); res.push({tipo:'tela', it, g:g.g, m:x.m, cab:pri?'Todas as telas do '+tnRotulo(x.m):''}); pri=false; })); });
+  const l=[];
+  MENU.forEach(g=>g.itens.forEach(it=>{ if(!podeVer(it.id) || ja.has(it.id)) return; const m=moduloDoGrupo(g.g); const r=norm(it.r); const txt=norm(it.r+' '+g.g+' '+(m?tnRotulo(m):'')+' '+(it.d||''));
+    if(tk.every(k=>txt.includes(k))) l.push({tipo:'tela', it, g, m, peso:r.startsWith(tk[0])?0:(tk.every(k=>r.includes(k))?1:2)}); }));
   l.sort((a,b)=>a.peso-b.peso || a.it.r.localeCompare(b.it.r));
-  TN.res=l.slice(0,15); TN.resSel=0; tnResRender();
+  l.slice(0,30).forEach((x,i)=>res.push(Object.assign(x, {cab:i===0?(res.length?'Outras telas com “'+v.trim()+'”':'Telas'):''})));
+  TN.res=res; TN.resSel=0; tnResRender();
+}
+function tnResEscolher(i){
+  const x=TN.res[i]; if(!x) return; const b=document.getElementById('tnBusca'); if(b){ b.value=''; b.blur(); }
+  if(x.tipo==='mod') tnAbrirModulo(x.x.m.id); else tnIr(x.it.id);
 }
 function tnResRender(){
   const r=document.getElementById('tnRes'); if(!r) return;
-  r.innerHTML=TN.res.length?TN.res.map((x,i)=>`<a class="tn-ritem ${i===TN.resSel?'sel':''}" onmousedown="event.preventDefault();tnIr('${x.it.id}')"><span class="tn-ic">${x.it.ic}</span><span><b>${esc(x.it.r)}</b><small>${esc((x.m?tnRotulo(x.m)+' › ':'')+x.g.g)}</small></span></a>`).join(''):'<div class="tn-rvazio">Nenhuma tela com esse nome.</div>';
+  r.innerHTML=TN.res.length?TN.res.map((x,i)=>(x.cab?`<div class="tn-rcab">${esc(x.cab)}</div>`:'')+(x.tipo==='mod'
+      ? `<a class="tn-ritem tn-rmod ${i===TN.resSel?'sel':''}" onmousedown="event.preventDefault();tnResEscolher(${i})"><span class="tn-ic">${x.x.m.ic}</span><span><b>${esc(x.x.m.nome)}</b><small>Abrir o módulo completo — ${x.x.grupos.reduce((s,g)=>s+g.itens.length,0)} telas</small></span></a>`
+      : `<a class="tn-ritem ${i===TN.resSel?'sel':''}" onmousedown="event.preventDefault();tnResEscolher(${i})"><span class="tn-ic">${x.it.ic}</span><span><b>${esc(x.it.r)}</b><small>${esc((x.m?tnRotulo(x.m)+' › ':'')+(x.g.g||x.g))}</small></span></a>`)).join('')
+    : '<div class="tn-rvazio">Nenhum módulo ou tela com esse nome.</div>';
   r.classList.add('aberto');
+  const s=r.querySelector('.tn-ritem.sel'); if(s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
 }
 function tnBuscaFechar(){ const r=document.getElementById('tnRes'); if(r){ r.classList.remove('aberto'); r.innerHTML=''; } const i=document.getElementById('tnBusca'); if(i && document.activeElement!==i) i.value=''; TN.res=[]; }
 function tnBuscaTecla(e){
   if(e.key==='ArrowDown' && TN.res.length){ e.preventDefault(); TN.resSel=(TN.resSel+1)%TN.res.length; tnResRender(); }
   else if(e.key==='ArrowUp' && TN.res.length){ e.preventDefault(); TN.resSel=(TN.resSel-1+TN.res.length)%TN.res.length; tnResRender(); }
-  else if(e.key==='Enter'){ e.preventDefault(); const x=TN.res[TN.resSel]; if(x){ e.target.value=''; e.target.blur(); tnIr(x.it.id); } }
+  else if(e.key==='Enter'){ e.preventDefault(); if(TN.res[TN.resSel]) tnResEscolher(TN.resSel); }
   else if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); e.target.value=''; e.target.blur(); tnBuscaFechar(); }
 }
 
