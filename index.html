@@ -630,6 +630,9 @@ const DOC_CONTADORES = 'contadores';
                              da busca); a barra cresce para duas linhas quando não cabem numa só
      1.21.2026  16/10/2026   Unidades de medida da farmácia (UNIDADE.XML do Fiorilli) que entraram como Unidade de
                              Saúde: importação corrigida e botão "Corrigir agora" na tela Unidades de Saúde
+     1.22.2026  16/10/2026   Unidade de trabalho escolhida ao entrar no módulo (como no SIS da Fiorilli); profissionais
+                             oferecidos só os vinculados à unidade; módulo aberto só com ele na barra
+                             (Trocar unidade / Sair do módulo); 2ª linha do menu alinhada à esquerda
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 /* Licença gravada no próprio arquivo (1.19): o gerador de instalação do Administrador Master troca a linha
@@ -637,7 +640,7 @@ const APP_NOME = 'Programa Integral de Saúde';
    (ou todos os módulos, se ninguém definiu). NÃO mexa nos comentários em volta: o gerador procura por eles. */
 /*LICENCA_FIXA*/var LICENCA_FIXA=null;/*FIM_LICENCA_FIXA*/
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 21;
+const APP_ALTERACAO = 22;
 const APP_DATA = '2026-10-16';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -1935,7 +1938,9 @@ function moduloDoGrupo(g){ return MODULOS_MENU.find(m=>m.grupos.includes(g)); }
 function renderNav(){
   const nav=document.getElementById('navlist'); if(!nav) return;
   const termo=norm(navBusca); const abertos=navAbertosSet(); const modAbertos=navModulosSet();
-  const grupos=MENU.map(g=>({g:g.g, ic:g.ic, itens:g.itens.filter(it=>podeVer(it.id) && (!termo || norm(it.r).includes(termo) || norm(g.g).includes(termo) || norm(it.d||'').includes(termo)))})).filter(g=>g.itens.length);
+  let grupos=MENU.map(g=>({g:g.g, ic:g.ic, itens:g.itens.filter(it=>podeVer(it.id) && (!termo || norm(it.r).includes(termo) || norm(g.g).includes(termo) || norm(it.d||'').includes(termo)))})).filter(g=>g.itens.length);
+  /* 1.22: com um módulo aberto, o menu lateral (celular) mostra só ele */
+  const navFoco=typeof moduloFoco==='function'?moduloFoco():''; if(navFoco){ const mf=MODULOS_MENU.find(m=>m.id===navFoco); grupos=grupos.filter(g=>mf && mf.grupos.includes(g.g)); }
   const grupoHTML=g=>{
     const ativo=g.itens.some(it=>it.id===currentView); const aberto=!!termo || abertos.has(g.g) || ativo;
     return `<div class="navgroup ${aberto?'open':''} ${ativo?'has-active':''}">
@@ -1955,6 +1960,7 @@ function renderNav(){
       <div class="navmod-items">${gs.map(grupoHTML).join('')}</div>
     </div>`;
   }).join('') + grupos.filter(g=>!moduloDoGrupo(g.g)).map(grupoHTML).join('');
+  if(navFoco && typeof navFocoHTML==='function') nav.insertAdjacentHTML('afterbegin', navFocoHTML());
   const su=document.getElementById('sidebarUsuario'); if(su) su.textContent=USUARIO?('👤 '+(USUARIO.nome||USUARIO.email)+' — '+(PERFIL?PERFIL.nome:'')):'';
 }
 function renderNavBadges(){ renderNav(); }
@@ -2041,9 +2047,22 @@ function rotuloDe(tab, rec){
   return rec.nome || rec.descricao || rec.codigo || '';
 }
 function nomeDe(tab, id){ const r=obter(tab,id); return r ? rotuloDe(tab,r) : ''; }
+/* 1.22: módulos que trabalham por unidade (a unidade é escolhida ao entrar neles) e profissionais da unidade */
+const MOD_POR_UNIDADE=['amb','lab','farma','hosp','rx','vz','bs','tr','fat'];
+function profNaUnidade(p, un){ return !un || !p || !Array.isArray(p.unidades) || !p.unidades.length || p.unidades.includes(un); }
+function profFiltrarPorUnidade(){ if(!UNIDADE_ATUAL) return false; const it=MENU_ITENS[currentView]; const m=it?moduloDoGrupo(it.grupo):null; return !!(m && MOD_POR_UNIDADE.includes(m.id)); }
+function profsDaUnidade(l){ if(!profFiltrarPorUnidade()) return l; return l.filter(p=>profNaUnidade(p, UNIDADE_ATUAL)); }
+/* unidade sem nenhum profissional vinculado: a lista fica vazia, não abre e mostra o aviso (pedido do usuário) */
+const MSG_SEM_PROF='UNIDADE SEM PROFISSIONAL VINCULADO. FAVOR VINCULAR UM PROFISSIONAL A ESTA UNIDADE';
+function unidadeSemProfissional(){ return profFiltrarPorUnidade() && !ativos('profissionais').some(p=>profNaUnidade(p, UNIDADE_ATUAL)); }
+function avisoSemProfissional(){ showToast(MSG_SEM_PROF,'warning'); }
+function selSemProfHTML(id, extra){ return `<select id="${id}" class="sel-sem-prof" ${extra||''} onmousedown="event.preventDefault();avisoSemProfissional()" onkeydown="if(event.key!=='Tab'){event.preventDefault();avisoSemProfissional();}"><option value="">⚠ UNIDADE SEM PROFISSIONAL VINCULADO</option></select><div class="small" style="color:var(--red);margin-top:3px;font-weight:600;">${MSG_SEM_PROF}.</div>`; }
 function opcoesRef(tab, valor, filtro){
   let l=lista(tab).filter(r=>r.ativo!==false || r.id===valor || (Array.isArray(valor)&&valor.includes(r.id)));
   if(filtro) l=l.filter(r=>filtro(r) || r.id===valor);
+  /* profissionais: nos módulos que trabalham por unidade, só os vinculados à unidade atual (cadastro → "Unidades em
+     que atende"; sem nenhuma marcada = todas). O já escolhido continua na lista. Se ninguém está vinculado, mostra todos. */
+  if(tab==='profissionais' && profFiltrarPorUnidade()){ const sel=r=>r.id===valor || (Array.isArray(valor)&&valor.includes(r.id)); l=l.filter(r=>profNaUnidade(r, UNIDADE_ATUAL) || sel(r)); }
   return ordenarTexto(l, r=>rotuloDe(tab,r));
 }
 function campoHTML(pref, c, v){
@@ -2062,6 +2081,7 @@ function campoHTML(pref, c, v){
     case 'sel': { const ops=(typeof c.op==='function'?c.op():c.op||[]).map(o=>Array.isArray(o)?o:[o,o]);
       inp=`<select id="${id}" ${c.ro?'disabled':''}${ext}>${c.vazio===false?'':`<option value="">${esc(c.vazio||'—')}</option>`}${ops.map(o=>`<option value="${esc(o[0])}" ${String(o[0])===String(v)?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`; break; }
     case 'ref': { const ops=opcoesRef(c.tab, v, c.filtro);
+      if(c.tab==='profissionais' && !ops.length && unidadeSemProfissional()){ inp=selSemProfHTML(id); break; }
       inp=`<select id="${id}" ${c.ro?'disabled':''}${ext}><option value="">${esc(c.vazio||'—')}</option>${ops.map(r=>`<option value="${r.id}" ${r.id===v?'selected':''}>${esc(rotuloDe(c.tab,r))}${r.ativo===false?' (inativo)':''}</option>`).join('')}</select>`; break; }
     case 'multi': { const ops = c.tab ? opcoesRef(c.tab, v, c.filtro).map(r=>[r.id, rotuloDe(c.tab,r)]) : (typeof c.op==='function'?c.op():c.op||[]).map(o=>Array.isArray(o)?o:[o,o]);
       const arr=Array.isArray(v)?v:[];
@@ -3739,8 +3759,8 @@ async function abrirTriagem(id){ await garantirMesFicha(obter('atendimentos',id)
       <div class="field w4"><label>Observações da triagem</label><textarea id="triObs" rows="2">${esc(t.obs||'')}</textarea></div></div>
     <h3>Classificação de risco</h3>${riscoSelHTML('triRisco', a.risco||'')}
     <h3>Procedimentos realizados na triagem</h3><div class="checks">${procsAuto.map(x=>`<label class="check"><input type="checkbox" class="triProc" value="${esc(x[2])}" data-nome="${esc(x[1])}" ${ja.has(x[2])?'checked':''}> ${esc(x[1])} <span class="muted small">${esc(fmtSigtap(x[2]))}</span></label>`).join('')}</div>
-    <h3>Encaminhar para</h3><div class="formgrid"><div class="field w2"><label>Profissional</label><select id="triProf"><option value="">—</option>${opcoesRef('profissionais', a.profissionalId).map(x=>`<option value="${x.id}" ${x.id===a.profissionalId?'selected':''}>${esc(x.nome)}</option>`).join('')}</select></div>
-      <div class="field w2"><label>Profissional que fez a triagem</label><select id="triPor">${opcoesRef('profissionais', t.profissionalId||(USUARIO&&USUARIO.profissionalId)).map(x=>`<option value="${x.id}" ${x.id===(t.profissionalId||(USUARIO&&USUARIO.profissionalId))?'selected':''}>${esc(x.nome)}</option>`).join('')}</select></div></div>`,
+    <h3>Encaminhar para</h3><div class="formgrid"><div class="field w2"><label>Profissional</label>${unidadeSemProfissional()&&!opcoesRef('profissionais', a.profissionalId).length?selSemProfHTML('triProf'):`<select id="triProf"><option value="">—</option>${opcoesRef('profissionais', a.profissionalId).map(x=>`<option value="${x.id}" ${x.id===a.profissionalId?'selected':''}>${esc(x.nome)}</option>`).join('')}</select>`}</div>
+      <div class="field w2"><label>Profissional que fez a triagem</label>${unidadeSemProfissional()&&!opcoesRef('profissionais', t.profissionalId||(USUARIO&&USUARIO.profissionalId)).length?selSemProfHTML('triPor'):''}<select id="triPor" ${unidadeSemProfissional()&&!opcoesRef('profissionais', t.profissionalId||(USUARIO&&USUARIO.profissionalId)).length?'style="display:none"':''}>${opcoesRef('profissionais', t.profissionalId||(USUARIO&&USUARIO.profissionalId)).map(x=>`<option value="${x.id}" ${x.id===(t.profissionalId||(USUARIO&&USUARIO.profissionalId))?'selected':''}>${esc(x.nome)}</option>`).join('')}</select></div></div>`,
     botoes:[{r:'💾 Salvar rascunho', cls:'secondary', fn:'triSalvar(false)'},{r:'✅ Concluir triagem', fn:'triSalvar(true)'}], botoesEsq:[{r:'📢 Chamar', fn:`chamarPaciente('${id}')`}]});
   ['tv_peso','tv_altura'].forEach(i=>{ const el=document.getElementById(i); if(el) el.addEventListener('input', ()=>{ document.querySelector('.triProc[value="'+param('procAntropometria')+'"]') && (document.querySelector('.triProc[value="'+param('procAntropometria')+'"]').checked=true); }); });
   const pa=document.getElementById('tv_pas'); if(pa) pa.addEventListener('input', ()=>{ const x=document.querySelector('.triProc[value="'+param('procAferirPA')+'"]'); if(x) x.checked=true; });
@@ -3770,12 +3790,12 @@ function triSalvar(concluir){
 let CONS={profId:'', data:hojeISO()};
 VIEWS.consultorio=()=>{
   if(!CONS.profId) CONS.profId=(USUARIO&&USUARIO.profissionalId)||'';
-  const profs=ordenarTexto(ativos('profissionais').filter(p=>p.tipo!=='acs'), p=>p.nome);
+  const profs=ordenarTexto(profsDaUnidade(ativos('profissionais').filter(p=>p.tipo!=='acs')), p=>p.nome);
   const fila=filaDoDia(CONS.data).filter(a=>!CONS.profId || a.profissionalId===CONS.profId || (!a.profissionalId && (obter('profissionais',CONS.profId)||{}).especialidadeId===a.especialidadeId));
   const aguard=ordenarFila(fila.filter(a=>['aguardandoAtendimento','atendimento'].includes(a.status) || (a.status==='aguardando'&&!a.triagemObrigatoria)));
   const naTri=fila.filter(a=>a.status==='aguardando'&&a.triagemObrigatoria || a.status==='triagem');
   const fin=fila.filter(a=>['finalizado','observacao'].includes(a.status));
-  return `<div class="card"><div class="actions"><div class="field" style="min-width:300px;"><label>Profissional</label><select onchange="CONS.profId=this.value;render()"><option value="">Todos</option>${profs.map(p=>`<option value="${p.id}" ${p.id===CONS.profId?'selected':''}>${esc(p.nome)} — ${esc(nomeDe('especialidades',p.especialidadeId))}</option>`).join('')}</select></div>
+  return `<div class="card"><div class="actions"><div class="field" style="min-width:300px;"><label>Profissional</label>${!profs.length&&unidadeSemProfissional()?`<div class="alerta-erro" style="margin:0;">⚠ ${MSG_SEM_PROF}.</div>`:''}<select onchange="CONS.profId=this.value;render()" ${!profs.length&&unidadeSemProfissional()?'style="display:none"':''}><option value="">Todos</option>${profs.map(p=>`<option value="${p.id}" ${p.id===CONS.profId?'selected':''}>${esc(p.nome)} — ${esc(nomeDe('especialidades',p.especialidadeId))}</option>`).join('')}</select></div>
     <div class="field"><label>Dia</label><input type="date" value="${CONS.data}" onchange="CONS.data=this.value;garantirPeriodo(['atendimentos','clinico'],CONS.data,CONS.data).then(()=>render())"></div>
     <div style="margin-left:auto;align-self:end;" class="actions">${pode('consultorio')&&pode('recepcao')?`<button class="btn secondary" onclick="abrirFA(null,{profissionalId:CONS.profId})">+ Paciente sem ficha (abrir F.A.)</button>`:''}</div></div>
     ${!USUARIO||!USUARIO.profissionalId?'<div class="small muted">Dica: o administrador pode ligar seu usuário ao seu cadastro de profissional (Administração → Usuários) para esta tela já abrir na sua fila.</div>':''}</div>
@@ -7135,6 +7155,7 @@ const VERSOES=[
   ['1.19.2026','16/10/2026','ADMINISTRADOR MASTER: quem instalou o sistema passa a ser o Administrador Master (perfil novo, com tudo o que o administrador faz). Só ele vê a tela Módulo Menu › Sistema e Ajuda › Administrador Master, onde escolhe os MÓDULOS CONTRATADOS desta instalação (os outros somem do menu, da busca, dos painéis e dos perfis de todos — os dados ficam guardados e voltam ao marcar de novo), informa contratante e vigência (aviso 30 dias antes de vencer) e GERA A INSTALAÇÃO PARA OUTRA SECRETARIA / MUNICÍPIO: um index.html ligado ao Firebase do cliente, só com os módulos que ele comprou gravados no próprio arquivo, com o roteiro de implantação e as regras do banco prontas. Só um master dá ou tira o perfil master, e sempre fica pelo menos um. CONTROLE CONVÊNIOS: o módulo "Controle de Exames" passa a se chamar Controle Convênios (as telas e os dados não mudam; a busca acha pelos dois nomes). MÓDULO UTILIDADES / LINKS ÚTEIS (novo): links oficiais do Ministério da Saúde, DATASUS, IBGE, ANS, Anvisa e outros, com busca instantânea, categorias, favoritos e acesso rápido (como a barra Links Úteis do SIS da Fiorilli); Links da Secretaria (cadastro próprio); e Downloads e Pasta de Atualizações — o sistema cria no computador a pasta ATUALIZAÇÕES DO APLICATIVO (uma subpasta por assunto), guarda nela o que é baixado, instala o ATUALIZADOR (Windows) que baixa de uma vez as tabelas e os programas do DATASUS, inclusive do FTP, e permite usar os arquivos da pasta direto no sistema (SIGTAP, CID-10, municípios). O CID-10 também aceita o .zip do DATASUS com o CSV dentro.'],
   ['1.20.2026','16/10/2026','MENU PRINCIPAL COM TODOS OS MÓDULOS: a barra do alto mostra o botão de cada módulo — nada mais fica escondido em "Gestão" ou "Mais". Os módulos de atendimento ficam à esquerda e os de gestão (Faturamento, Financeiro, Controle Convênios, Cotações e Audiências) à direita, junto da busca, com o rótulo GESTÃO (que abre os cinco juntos num só painel). Quando não cabem numa linha, a barra cresce para duas; em telas menores os botões ficam mais compactos. O menu lateral (opção no menu do usuário) e o celular continuam como antes.'],
   ['1.21.2026','16/10/2026','UNIDADES DE SAÚDE × UNIDADES DE MEDIDA: a tabela UNIDADE do Fiorilli (UNIDADE.XML: ampola, frasco, comprimido, caixa...) é a das unidades de MEDIDA da farmácia, mas a importação de todas as tabelas a mandava para as Unidades de Saúde. Agora ela vai para Farmácia › Tabelas › Unidades de medida (e os produtos do CADEST se ligam à unidade certa pelo nome); a importação de Unidades de Saúde recusa linha que é unidade de medida sem CNES. Na tela Unidades de Saúde, um aviso mostra os cadastros que entraram errado e o botão "Corrigir agora" passa cada um para as unidades de medida da farmácia e o tira da lista das unidades de saúde (o registro fica guardado e marcado — nada é apagado).'],
+  ['1.22.2026','16/10/2026','UNIDADE DE TRABALHO, COMO NO SIS DA FIORILLI: ao entrar num módulo que trabalha por unidade (Ambulatório, Laboratório, Farmácia, Hospital, Raio-X, Vigilância, Banco de Sangue, Transporte e Faturamento) abre a janela "Escolha a unidade de trabalho" com as unidades de saúde que a pessoa pode acessar (código CNES e nome, com pesquisa, setas e Enter). O que for lançado no módulo fica na unidade escolhida e as listas mostram só o que é dela. Navegar dentro do mesmo módulo não pergunta de novo; quem só acessa uma unidade entra direto; o painel do módulo e o menu do usuário têm "trocar". PROFISSIONAIS DA UNIDADE: nesses módulos, as listas de profissionais (formulários, consultório, odontologia, filtros) mostram só os vinculados à unidade no cadastro do profissional ("Unidades em que atende"); quem não tem nenhuma unidade marcada aparece em todas. MÓDULO ABERTO: ao entrar num módulo, a barra do alto mostra só ele — o nome, a unidade de trabalho e os grupos de telas como menus (Pacientes, Agendamento, Atendimento...) —, com os comandos "Trocar unidade" (continuar no módulo em outra unidade) e "Sair do módulo" (volta ao menu com todos os módulos). Ao entrar no sistema abre o menu com todos os módulos. As telas gerais (recados, senha, ajuda) abrem sem fechar o módulo, e a busca procura só nas telas dele. MENU: a segunda linha da barra começa à esquerda, alinhada com a primeira.'],
 ];
 VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
   <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.filter(m=>modContratado(m.id)).map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div>${licencaAtual()?`<div><span class="k">Licenciado para</span><span class="v">${esc(licencaAtual().contratante||'—')}${licencaAtual().fim?' · vigência até '+fmtData(licencaAtual().fim):''}</span></div>`:''}</div>
@@ -12886,9 +12907,9 @@ function odoAbrirNaFicha(id){ ODO_ABRIR=id; abrirAtendimento(id); }
 /* ---------------- tela: Consultório Odontológico ---------------- */
 let ODOV={aba:'fila', profId:'', data:hojeISO(), pacId:'', sel:''};
 VIEWS.odontologia=()=>{
-  const profs=ordenarTexto(ativos('profissionais').filter(odoProfissional), p=>p.nome); if(!ODOV.profId && USUARIO && USUARIO.profissionalId && profs.some(p=>p.id===USUARIO.profissionalId)) ODOV.profId=USUARIO.profissionalId;
+  const profs=ordenarTexto(profsDaUnidade(ativos('profissionais').filter(odoProfissional)), p=>p.nome); if(!ODOV.profId && USUARIO && USUARIO.profissionalId && profs.some(p=>p.id===USUARIO.profissionalId)) ODOV.profId=USUARIO.profissionalId;
   const tabs=`<div class="tabs">${[['fila','🦷 Fila do dia'],['atendidos','✅ Atendidos'],['odontograma','📋 Odontograma do paciente']].map(([k,r])=>`<div class="tab ${ODOV.aba===k?'active':''}" onclick="ODOV.aba='${k}';render()">${r}</div>`).join('')}</div>`;
-  if(!profs.length && ODOV.aba!=='odontograma') return tabs+`<div class="card"><div class="alerta-aviso">Nenhum profissional de saúde bucal cadastrado. Cadastre o cirurgião-dentista (ou TSB/ASB) em Profissionais com a especialidade de CBO 2232… (ou 3224…).</div></div>`;
+  if(!profs.length && ODOV.aba!=='odontograma') return tabs+`<div class="card">${ativos('profissionais').some(odoProfissional)&&profFiltrarPorUnidade()?`<div class="alerta-erro">⚠ ${MSG_SEM_PROF}.</div>`:`<div class="alerta-aviso">Nenhum profissional de saúde bucal cadastrado. Cadastre o cirurgião-dentista (ou TSB/ASB) em Profissionais com a especialidade de CBO 2232… (ou 3224…).</div>`}</div>`;
   if(ODOV.aba==='odontograma') return tabs+odoViewOdontograma();
   exigirPeriodo(['atendimentos','clinico'], ODOV.data, ODOV.data);
   const fila=filaDoDia(ODOV.data).filter(a=>odoEhAtendimento(a) && (!ODOV.profId || a.profissionalId===ODOV.profId || !a.profissionalId));
@@ -14367,7 +14388,8 @@ APPS_INT.aud={
    atendimento à esquerda e os de gestão (Faturamento, Financeiro e os
    aplicativos integrados) à direita, junto da busca; se não cabem numa
    linha, a barra cresce para duas (ou mais, em tela pequena). O rótulo
-   "Gestão" abre o painel com os módulos de gestão juntos.
+   "Gestão" abre o painel com os módulos de gestão juntos. 1.22: a segunda
+   linha começa à esquerda, como a primeira.
    Em telas estreitas (celular) o botão ☰ abre o menu lateral de sempre.
    Quem preferir o menu lateral antigo liga no menu do usuário (vale para o
    computador, fica no navegador). As permissões e as telas não mudam.
@@ -14411,7 +14433,7 @@ body:not(.menu-lateral) .demo-banner{top:auto;bottom:24px;border-radius:8px 8px 
 .tn-marca-txt small{display:block;font-weight:500;opacity:.75;font-size:10px;max-width:150px;overflow:hidden;text-overflow:ellipsis;}
 .tn-mods{display:flex;flex-wrap:wrap;align-items:center;align-content:center;gap:4px 2px;flex:1;min-width:0;white-space:nowrap;}
 .tn-g1,.tn-g2{display:flex;flex-wrap:wrap;align-items:center;gap:4px 2px;min-width:0;}
-.tn-g2{margin-left:auto;}
+.tn-g2{margin-left:0;}
 .tn-grot{flex:0 0 auto;background:transparent;border:0;border-left:1px solid rgba(255,255,255,.28);color:rgba(255,255,255,.7);font:inherit;font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;padding:6px 8px 6px 11px;margin-left:6px;cursor:pointer;border-radius:0 8px 8px 0;}
 .tn-grot:hover,.tn-grot.aberto{color:#fff;background:rgba(255,255,255,.1);}
 .topnav.tn-plano .tn-g1,.topnav.tn-plano .tn-g2{display:contents;}
@@ -14510,6 +14532,9 @@ function tnBotaoHTML(e){
 function tnLinhas(nav){ return new Set([...nav.querySelectorAll('.tn-mod')].map(b=>b.offsetTop)).size; }
 function tnMontarBarra(){
   const nav=document.getElementById('tnMods'); if(!nav) return; const mods=TN.mods; const tn=document.getElementById('topnav');
+  /* 1.22: com um módulo aberto, a barra mostra só ele (os grupos de telas viram os menus), como no SIS da Fiorilli */
+  const foco=typeof moduloFoco==='function'?moduloFoco():''; if(tn) tn.classList.toggle('tn-modo-modulo', !!foco);
+  if(foco && typeof tnMontarBarraModulo==='function'){ tnMontarBarraModulo(nav, tn, foco); return; }
   const item=x=>({k:x.m.id, rot:tnRotulo(x.m), ic:x.m.ic, mods:[x]});
   const ass=mods.filter(x=>!TN_GESTAO.includes(x.m.id)).map(item), gest=mods.filter(x=>TN_GESTAO.includes(x.m.id));
   const gestEnt=gest.map(item);
@@ -14533,7 +14558,7 @@ function tnRender(){
   const mods=tnModulos(); const ativo=tnModAtivo(); const badges=mods.map(tnBadgeMod);
   TN.mods=mods; TN.badges=Object.fromEntries(mods.map((x,i)=>[x.m.id, badges[i]]));
   tnTopoInfo(); tnCaminho();
-  const assin=JSON.stringify([mods.map(x=>x.m.id+':'+x.grupos.reduce((s,g)=>s+g.itens.length,0)), badges, ativo, (document.getElementById('topnav')||{}).offsetWidth||window.innerWidth, (PERFIL||{}).id, tnLateral()]);
+  const assin=JSON.stringify([mods.map(x=>x.m.id+':'+x.grupos.reduce((s,g)=>s+g.itens.length,0)), badges, ativo, (document.getElementById('topnav')||{}).offsetWidth||window.innerWidth, (PERFIL||{}).id, tnLateral(), typeof moduloFoco==='function'?moduloFoco()+'|'+UNIDADE_ATUAL:'', currentView]);
   if(assin===TN.assin) return;
   TN.assin=assin; if(tnLateral()) return;
   tnMontarBarra(); if(TN.aberto) tnPainelRender();
@@ -14551,18 +14576,20 @@ function tnAbrir(k){
 }
 function tnFechar(){
   clearTimeout(TN.timer); if(!TN.aberto) return; TN.aberto=null;
-  const p=document.getElementById('tnPainel'); if(p){ p.classList.remove('aberto'); p.innerHTML=''; }
+  const p=document.getElementById('tnPainel'); if(p){ p.classList.remove('aberto','tn-drop'); p.innerHTML=''; p.style.left=''; p.style.right=''; p.style.width=''; }
   document.querySelectorAll('#tnMods .tn-mod, #tnMods .tn-grot').forEach(b=>{ b.classList.remove('aberto'); b.setAttribute('aria-expanded','false'); });
 }
 function tnSel(id){ if(TN.sel===id) return; TN.sel=id; tnPainelRender(); }
 function tnPainelRender(){
   const p=document.getElementById('tnPainel'); const e=TN.ent.find(x=>x.k===TN.aberto); if(!p || !e){ tnFechar(); return; }
+  p.classList.remove('tn-drop'); p.style.left=''; p.style.right=''; p.style.width='';
+  if(e.grupo && typeof tnDropRender==='function'){ tnDropRender(p, e); return; }
   const composto=e.mods.length>1;
   const x=(composto && (e.mods.find(z=>z.m.id===TN.sel) || e.mods.find(z=>z.m.id===tnModAtivo()))) || e.mods[0]; TN.sel=x.m.id;
   const lado=composto?`<div class="tn-lado">${e.mods.map(z=>`<div class="tn-lmod ${z.m.id===x.m.id?'sel':''}" onmouseenter="tnSel('${z.m.id}')" onclick="tnSel('${z.m.id}')"><span class="tn-ic">${z.m.ic}</span>${esc(tnRotulo(z.m))}${TN.badges[z.m.id]?`<span class="nbadge">${TN.badges[z.m.id]}</span>`:''}</div>`).join('')}</div>`:'';
   const n=x.grupos.reduce((s,g)=>s+g.itens.length,0);
   const cols=x.grupos.map(g=>`<div class="tn-col"><div class="tn-gtit"><span>${g.g.ic||''}</span><span>${esc(g.g.g)}</span></div>${g.itens.map(it=>{ const b=navBadge(it.id); return `<a class="tn-item ${it.id===currentView?'ativo':''}" href="#${it.id}" onclick="tnIr('${it.id}');return false;" title="${esc(it.d||'')}"><span class="tn-ic">${it.ic}</span><span>${esc(it.r)}</span>${b?`<span class="nbadge">${b}</span>`:''}</a>`; }).join('')}</div>`).join('');
-  p.innerHTML=`<div class="tn-pcab"><span class="tn-pmic">${x.m.ic}</span><b>${esc(x.m.nome)}</b><span class="tn-pinfo">${n} tela(s)</span><span style="flex:1"></span><button type="button" class="tn-x" onclick="tnFechar()" title="Fechar (Esc)">✕</button></div><div class="tn-pcorpo">${lado}<div class="tn-cols">${cols}</div></div>`;
+  p.innerHTML=`<div class="tn-pcab"><span class="tn-pmic">${x.m.ic}</span><b>${esc(x.m.nome)}</b><span class="tn-pinfo">${n} tela(s)</span>${typeof modPedeUnidade==='function'&&modPedeUnidade(x.m.id)?`<span class="tn-pun">🏥 Unidade: <b>${esc(nomeDe('unidades',UNIDADE_ATUAL)||'—')}</b>${unidadesPermitidas().length>1?` <a href="#" onclick="unidTrocar('${x.m.id}');return false;">trocar</a>`:''}</span>`:''}<span style="flex:1"></span><button type="button" class="tn-x" onclick="tnFechar()" title="Fechar (Esc)">✕</button></div><div class="tn-pcorpo">${lado}<div class="tn-cols">${cols}</div></div>`;
   p.classList.add('aberto');
 }
 function tnIr(id){ tnFechar(); tnBuscaFechar(); goto(id); }
@@ -14635,6 +14662,7 @@ function tnUsuarioMenu(){
   const m=document.getElementById('tnUmenu'); if(!m) return; if(m.classList.contains('aberto')){ tnUsuarioFechar(); return; }
   tnFechar(); tnBuscaFechar(); const u=USUARIO||{};
   m.innerHTML=`<div class="tn-uinfo"><b>${esc(u.nome||u.email||'')}</b>${esc(u.email||'')}<br>Perfil: ${esc((PERFIL||{}).nome||'')}${MODO_DEMO?'<br>Modo demonstração':''}</div>
+    ${typeof unidTrocar==='function'&&unidadesPermitidas().length>1?`<button type="button" onclick="tnUsuarioFechar();unidTrocar()">🏥 Trocar a unidade de trabalho</button>`:''}
     <button type="button" onclick="tnUsuarioFechar();alterarMinhaSenha()">🔑 Alterar minha senha</button>
     <button type="button" onclick="tnTrocarEstilo()">↔️ ${tnLateral()?'Usar o menu horizontal':'Usar o menu lateral (antigo)'}</button>
     <button type="button" onclick="tnUsuarioFechar();sairDoSistema()">🚪 Sair do sistema</button>`;
@@ -15914,6 +15942,238 @@ async function mlicGerar(arquivo){
   registrarAcao('Administrador Master: gerou a instalação de '+lic.contratante+' ('+fb.projectId+') com '+fixa.modulos.length+' módulo(s)');
   showToast('Arquivo '+nome+' gerado. Publique com o nome index.html no repositório do cliente.','success');
 }
+
+/* ============================================================
+   UNIDADE DE TRABALHO AO ENTRAR NO MÓDULO (1.22) — como no SIS da Fiorilli
+   Ao entrar num módulo que trabalha por unidade (Ambulatório, Laboratório,
+   Farmácia, Hospital, Raio-X, Vigilância, Banco de Sangue, Transporte e
+   Faturamento) abre a janela "Escolha a unidade de trabalho" com as unidades
+   de saúde que a pessoa pode acessar (código CNES e nome, com pesquisa).
+   A unidade escolhida vira a unidade atual: o que for lançado (agenda,
+   recepção, fichas, consultas, produção...) fica nela, as listas mostram só
+   o que é dela e os profissionais oferecidos são só os vinculados a ela
+   (cadastro do profissional → "Unidades em que atende"; quem não tem
+   nenhuma marcada aparece em todas).
+   • Só pergunta ao ENTRAR no módulo: navegar dentro dele não pergunta de novo.
+   • Quem só pode acessar uma unidade entra direto nela.
+   • Nos módulos com unidade configurada para a produção (Laboratório,
+     Hospital, Raio-X...) a janela já vem com essa unidade marcada.
+   ============================================================ */
+const UN_MOD_KEY='pis_unid_mod', UN_MOD_SESS='pis_mod_atual';
+const UN_MOD={atual:'', ult:{}, iniciou:false};
+try{ UN_MOD.atual=JSON.parse(sessionStorage.getItem(UN_MOD_SESS)||'""')||''; }catch(e){}
+try{ UN_MOD.ult=JSON.parse(localStorage.getItem(UN_MOD_KEY)||'{}')||{}; }catch(e){}
+let UNSEL=null;
+function modPedeUnidade(mod){ return MOD_POR_UNIDADE.includes(mod) && !(PERFIL && PERFIL.id==='tv'); }
+function unidCfgModulo(mod){
+  try{
+    if(mod==='lab' && typeof labCfg==='function') return labCfg().unidadeId||'';
+    if(mod==='hosp' && typeof hospCfg==='function') return hospCfg().unidadeId||'';
+    if(mod==='rx' && typeof rxCfg==='function') return rxCfg().unidadeId||'';
+    if(mod==='vz' && typeof vzCfg==='function') return vzCfg().unidadeVisaId||vzCfg().unidadeZooId||'';
+    if(mod==='bs' && typeof bsCfg==='function') return bsCfg().unidadeId||'';
+    if(mod==='tr' && typeof trCfg==='function') return trCfg().unidadeId||'';
+  }catch(e){}
+  return '';
+}
+function unidMarcarModulo(mod){ if((mod||'')!==UN_MOD.atual && typeof TN!=='undefined') TN.assin=''; UN_MOD.atual=mod||''; try{ sessionStorage.setItem(UN_MOD_SESS, JSON.stringify(UN_MOD.atual)); }catch(e){} }
+function unidAplicar(id, mod){
+  const mudou=UNIDADE_ATUAL!==id; UNIDADE_ATUAL=id;
+  try{ localStorage.setItem('pis_unidade', id); }catch(e){}
+  if(mod){ UN_MOD.ult[mod]=id; try{ localStorage.setItem(UN_MOD_KEY, JSON.stringify(UN_MOD.ult)); }catch(e){} }
+  preencherSelUnidade(); atualizarRodape();
+  if(mudou) registrarAcao('Unidade de trabalho: '+(nomeDe('unidades',id)||id)+(mod?' ('+((MODULOS_MENU.find(m=>m.id===mod)||{}).nome||mod)+')':''));
+}
+/* entra no módulo: pergunta a unidade (se precisar) e depois segue (abre o painel ou a tela) */
+function unidEntrar(mod, depois){
+  const perm=unidadesPermitidas();
+  if(!modPedeUnidade(mod) || perm.length<=1){
+    if(modPedeUnidade(mod) && perm.length===1 && UNIDADE_ATUAL!==perm[0].id) unidAplicar(perm[0].id, mod);
+    unidMarcarModulo(mod); depois(); return;
+  }
+  unidEscolherAbrir(mod, depois);
+}
+function unidEscolherAbrir(mod, depois){
+  const m=MODULOS_MENU.find(x=>x.id===mod)||{nome:'', ic:'🏥'}; const perm=unidadesPermitidas();
+  const pre=[UN_MOD.ult[mod], unidCfgModulo(mod), UNIDADE_ATUAL].find(id=>id && perm.some(u=>u.id===id)) || (perm[0]||{}).id || '';
+  const primeira=!UN_MOD.iniciou;
+  UNSEL={mod, depois, busca:'', sel:pre, ok:false};
+  abrirModal({titulo:'🏥 Escolha a unidade de trabalho', corpo:`<div class="un-cab"><span class="un-mic">${m.ic||'🏥'}</span><div><b>${esc(m.nome||'')}</b><div class="small muted">O que você lançar neste módulo fica na unidade escolhida, e as listas e os profissionais oferecidos são os dela.</div></div></div>
+    <div class="un-busca"><span>🔎</span><input id="unBusca" autocomplete="off" placeholder="Pesquisar pela unidade (nome ou CNES)" oninput="UNSEL.busca=this.value;unidListaRender()" onkeydown="unidTecla(event)"></div>
+    <div id="unLista" class="un-lista"></div><div class="small muted mt">↑ ↓ para escolher · Enter ou duplo clique para entrar.</div>`,
+    botoes:[{r:'✔ Entrar nesta unidade', fn:'unidConfirmar()'}],
+    aoFechar:()=>{ const s=UNSEL; UNSEL=null; if(s && !s.ok && primeira){ /* na entrada do sistema, fechar sem escolher segue com a unidade de antes */ unidMarcarModulo(mod); s.depois(); } }});
+  unidListaRender(); setTimeout(()=>{ const i=document.getElementById('unBusca'); if(i) i.focus(); }, 60);
+}
+function unidTipo(u){ return u.tipo||''; }
+function unidFiltradas(){ const t=norm(UNSEL?UNSEL.busca:''); return unidadesPermitidas().filter(u=>!t || norm([u.nome, u.cnes, u.codigoSIS, u.tipo].join(' ')).includes(t)); }
+function unidListaRender(){
+  const el=document.getElementById('unLista'); if(!el || !UNSEL) return; const l=unidFiltradas();
+  if(l.length && !l.some(u=>u.id===UNSEL.sel)) UNSEL.sel=l[0].id;
+  el.innerHTML=l.length?`<table class="un-tab"><thead><tr><th>Código</th><th>Unidade</th><th>Tipo</th></tr></thead><tbody>${l.map(u=>`<tr class="${u.id===UNSEL.sel?'sel':''}" onclick="unidMarcar('${u.id}')" ondblclick="unidMarcar('${u.id}');unidConfirmar()"><td class="un-cod">${esc(u.cnes||u.codigoSIS||'')}</td><td><b>${esc(u.nome)}</b>${u.id===UNIDADE_ATUAL?' <span class="un-atual">atual</span>':''}</td><td class="small">${esc(unidTipo(u))}</td></tr>`).join('')}</tbody></table>`
+    : `<div class="muted" style="padding:16px;">Nenhuma unidade encontrada${UNSEL.busca?' para “'+esc(UNSEL.busca)+'”':''}.</div>`;
+  const s=el.querySelector('tr.sel'); if(s && s.scrollIntoView) s.scrollIntoView({block:'nearest'});
+}
+function unidMarcar(id){ if(!UNSEL) return; UNSEL.sel=id; unidListaRender(); }
+function unidTecla(e){
+  const l=unidFiltradas(); let i=l.findIndex(u=>u.id===UNSEL.sel);
+  if(e.key==='ArrowDown'){ e.preventDefault(); i=Math.min(l.length-1, i+1); if(l[i]) unidMarcar(l[i].id); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); i=Math.max(0, i-1); if(l[i]) unidMarcar(l[i].id); }
+  else if(e.key==='Enter'){ e.preventDefault(); unidConfirmar(); }
+}
+function unidConfirmar(){
+  if(!UNSEL || !UNSEL.sel){ showToast('Escolha a unidade.','warning'); return; }
+  const s=UNSEL; s.ok=true; fecharModalTopo(); unidAplicar(s.sel, s.mod); unidMarcarModulo(s.mod); s.depois();
+}
+/* trocar a unidade sem sair do módulo (painel do módulo e menu do usuário) */
+function unidTrocar(mod){
+  mod=mod || (typeof tnModAtivo==='function'?tnModAtivo():''); if(typeof tnFechar==='function') tnFechar();
+  if(unidadesPermitidas().length<=1){ showToast('Você só tem acesso a uma unidade.','warning'); return; }
+  unidEscolherAbrir(modPedeUnidade(mod)?mod:'', ()=>render());
+}
+(function(){
+  const st=document.createElement('style'); st.textContent=`
+.un-cab{display:flex;gap:12px;align-items:center;background:var(--teal-soft);border-radius:10px;padding:10px 12px;margin-bottom:10px;}
+.un-mic{font-size:26px;}
+.un-busca{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:0 10px;margin-bottom:8px;background:#fff;}
+.un-busca input{flex:1;border:0;outline:none;padding:10px 2px;font:inherit;font-size:14px;background:transparent;}
+.un-lista{max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:10px;}
+.un-tab{width:100%;border-collapse:collapse;font-size:13px;}
+.un-tab th{position:sticky;top:0;background:var(--teal-dark);color:#fff;text-align:left;padding:7px 10px;font-size:12px;}
+.un-tab td{padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer;}
+.un-tab tr:hover td{background:var(--teal-soft);}
+.un-tab tr.sel td{background:var(--teal);color:#fff;}
+.un-tab tr.sel .un-atual{background:#fff;color:var(--teal-dark);}
+.un-cod{font-family:ui-monospace,Consolas,monospace;white-space:nowrap;text-align:right;width:1%;}
+.un-atual{font-size:10px;font-weight:800;border-radius:999px;padding:1px 7px;background:var(--teal-soft);color:var(--teal-dark);margin-left:6px;}
+.tn-pun{font-size:12px;color:var(--ink-soft);margin-left:8px;padding-left:10px;border-left:1px solid var(--line);}
+.tn-pun b{color:var(--teal-dark);}
+.tn-pun a{margin-left:6px;}
+`; document.head.appendChild(st);
+})();
+/* ============================================================
+   MÓDULO ABERTO (1.22) — como as janelas do SIS: ao entrar num módulo, a
+   barra do alto mostra só ele — o nome, a unidade de trabalho (com
+   "trocar"), os grupos de telas como menus (Pacientes, Agendamento,
+   Atendimento...) e "Sair do módulo", que volta ao menu com todos os
+   módulos. As telas gerais do Módulo Menu (recados, senha, ajuda) abrem
+   sem fechar o módulo.
+   ============================================================ */
+function moduloFoco(){ const m=UN_MOD.atual; if(!m || m==='menu') return ''; return MODULOS_MENU.some(x=>x.id===m) ? m : ''; }
+function moduloPrimeiraTela(mod){ const m=MODULOS_MENU.find(x=>x.id===mod); if(!m) return ''; const it=MENU.filter(g=>m.grupos.includes(g.g)).flatMap(g=>g.itens).find(i=>podeVer(i.id) && i.id!=='menuPainel'); return it?it.id:''; }
+function moduloEntrar(mod){
+  if(typeof tnFechar==='function') tnFechar(); if(typeof tnBuscaFechar==='function') tnBuscaFechar();
+  if(mod==='menu'){ moduloSair(); return; }
+  const v=moduloPrimeiraTela(mod); if(!v){ showToast('Seu perfil não tem telas neste módulo.','warning'); return; }
+  if(mod===UN_MOD.atual){ goto(v); return; }
+  unidEntrar(mod, ()=>{ UN_MOD.iniciou=true; TN.assin=''; _gotoSemUnidade(v); registrarAcao('Entrou no '+((MODULOS_MENU.find(m=>m.id===mod)||{}).nome||mod)+(modPedeUnidade(mod)?' — unidade '+(nomeDe('unidades',UNIDADE_ATUAL)||''):'')); });
+}
+function moduloSair(){
+  if(typeof tnFechar==='function') tnFechar(); if(typeof tnBuscaFechar==='function') tnBuscaFechar(); toggleSidebar(true);
+  const m=MODULOS_MENU.find(x=>x.id===UN_MOD.atual); unidMarcarModulo(''); TN.assin='';
+  if(m) registrarAcao('Saiu do '+m.nome);
+  _gotoSemUnidade(podeVer('menuPainel')?'menuPainel':primeiraTelaPermitida());
+}
+function tnMontarBarraModulo(nav, tn, foco){
+  const x=(TN.mods||[]).find(z=>z.m.id===foco); const m=x?x.m:(MODULOS_MENU.find(z=>z.id===foco)||{nome:'', ic:'📁'});
+  const grupos=x?x.grupos:[]; const pede=modPedeUnidade(foco); const un=pede?unidadeAtual():null;
+  const ents=grupos.map((g,i)=>({k:'g'+i, rot:String(g.g.g).replace(/^\d+\.\s*/,''), ic:g.g.ic||'📁', mods:[x], grupo:g}));
+  /* 'modulo' (todas as telas juntas, como antes) vem primeiro: é o que o caminho no alto da tela e a busca abrem */
+  TN.ent=(x?[{k:'modulo', rot:tnRotulo(m), ic:m.ic, mods:[x]}]:[]).concat(ents);
+  const bdg=e=>e.grupo.itens.reduce((s,it)=>s+(Number(navBadge(it.id))||0),0);
+  const btn=e=>{ const ativo=e.grupo.itens.some(it=>it.id===currentView); const b=bdg(e); return `<button type="button" class="tn-mod ${ativo?'ativo':''} ${TN.aberto===e.k?'aberto':''}" data-k="${e.k}" aria-haspopup="true" onclick="tnClicar('${e.k}')" onmouseenter="tnPassar('${e.k}')" onmouseleave="clearTimeout(TN.timer)" title="${esc(e.grupo.g.g)}"><span class="tn-icw ${b?'com':''}">${e.ic}${b?`<span class="tn-bdg">${b>99?'99+':b}</span>`:''}</span><span>${esc(e.rot)}</span></button>`; };
+  nav.innerHTML=`<div class="tn-foco"><button type="button" class="tn-foco-mod" data-k="modulo" onclick="tnClicar('modulo')" title="Ver todas as telas do ${esc(m.nome)}"><span class="tn-foco-ic">${m.ic}</span><span class="tn-foco-nome">${esc(tnRotulo(m))}</span></button>${pede?`<button type="button" class="tn-foco-un" onclick="unidTrocar('${foco}')" title="Continuar neste módulo em outra unidade">🏥 <b>${esc(un?un.nome:'escolha a unidade')}</b>${un&&un.cnes?' <small>'+esc(un.cnes)+'</small>':''}</button>`:''}<div class="tn-foco-acoes">${pede&&unidadesPermitidas().length>1?`<button type="button" class="tn-sair" onclick="unidTrocar('${foco}')" title="Continuar neste módulo em outra unidade">🏥 Trocar unidade</button>`:''}<button type="button" class="tn-sair" onclick="moduloSair()" title="Fechar este módulo e voltar ao menu com todos os módulos">✕ Sair do módulo</button></div></div>
+    <div class="tn-g1">${ents.map(btn).join('')}</div>`;
+  if(tn){
+    tn.classList.remove('tn-plano','tn-compacto');
+    if(nav.offsetParent!==null){ for(const e of [['tn-plano'],['tn-compacto','tn-plano']]){ tn.classList.remove('tn-plano','tn-compacto'); e.forEach(c=>tn.classList.add(c)); if(tnLinhas(nav)<=2) break; } }
+    document.documentElement.style.setProperty('--tn-h', (tn.offsetHeight||54)+'px');
+    const bi=document.getElementById('tnBusca'); if(bi) bi.placeholder='Buscar no módulo… (Ctrl+K)';
+  }
+  if(typeof appAjustarAltura==='function') setTimeout(appAjustarAltura, 0);
+  if(TN.aberto && !TN.ent.some(e=>e.k===TN.aberto)) tnFechar();
+}
+/* menu de um grupo: lista curta logo abaixo do botão */
+function tnDropRender(p, e){
+  const tn=document.getElementById('topnav'); const b=document.querySelector(`#tnMods [data-k="${e.k}"]`);
+  const larg=Math.min(340, (tn?tn.clientWidth:600)-20);
+  let left=10; if(b && tn){ left=b.getBoundingClientRect().left - tn.getBoundingClientRect().left; left=Math.max(10, Math.min(left, tn.clientWidth-larg-10)); }
+  p.innerHTML=`<div class="tn-dcab"><span>${e.ic}</span><b>${esc(e.grupo.g.g)}</b></div><div class="tn-dcorpo">${e.grupo.itens.map(it=>{ const bd=navBadge(it.id); return `<a class="tn-item ${it.id===currentView?'ativo':''}" href="#${it.id}" onclick="tnIr('${it.id}');return false;" title="${esc(it.d||'')}"><span class="tn-ic">${it.ic}</span><span>${esc(it.r)}</span>${bd?`<span class="nbadge">${bd}</span>`:''}</a>`; }).join('')}</div>`;
+  p.classList.add('aberto','tn-drop'); p.style.left=left+'px'; p.style.right='auto'; p.style.width=larg+'px';
+}
+/* menu lateral (celular / menu lateral antigo) com um módulo aberto */
+function navFocoHTML(){
+  const foco=moduloFoco(); const m=MODULOS_MENU.find(x=>x.id===foco); if(!m) return ''; const un=modPedeUnidade(foco)?unidadeAtual():null;
+  return `<div class="nav-foco"><div class="nav-foco-mod">${m.ic} ${esc(m.nome)}</div>${modPedeUnidade(foco)?`<div class="nav-foco-un">🏥 ${esc(un?un.nome:'—')}</div>`:''}<div class="nav-foco-acoes">${modPedeUnidade(foco)&&unidadesPermitidas().length>1?`<button type="button" onclick="toggleSidebar(true);unidTrocar('${foco}')">🏥 Trocar unidade</button>`:''}<button type="button" onclick="moduloSair()">✕ Sair do módulo</button></div></div>`;
+}
+(function(){
+  const st=document.createElement('style'); st.textContent=`
+.tn-foco{display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 12px 0 4px;margin-right:6px;border-right:1px solid rgba(255,255,255,.25);flex:0 0 auto;min-width:0;max-width:300px;}
+.tn-foco-mod{display:flex;align-items:center;gap:7px;background:transparent;border:0;color:#fff;font:inherit;cursor:pointer;padding:0;text-align:left;}
+.tn-foco-ic{font-size:20px;line-height:1;}
+.tn-foco-nome{font-size:13.5px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;}
+.tn-foco-mod:hover .tn-foco-nome,.tn-foco-mod.aberto .tn-foco-nome{text-decoration:underline;}
+.tn-foco-un{background:transparent;border:0;color:#FFE7A3;font:inherit;font-size:11.5px;padding:0;cursor:pointer;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:290px;}
+.tn-foco-un b{font-weight:700;}
+.tn-foco-un small{opacity:.8;}
+.tn-foco-un span{opacity:.85;margin-left:4px;text-decoration:underline;}
+.tn-foco-acoes{display:flex;gap:5px;margin-top:4px;}
+.tn-sair{flex:0 0 auto;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.4);color:#fff;font:inherit;font-size:11px;font-weight:700;border-radius:7px;padding:3px 9px;cursor:pointer;white-space:nowrap;}
+.tn-sair:hover{background:#fff;color:var(--teal-dark);}
+.tn-painel.tn-drop{border-radius:0 0 12px 12px;}
+.tn-dcab{display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;letter-spacing:.05em;color:var(--teal-dark);text-transform:uppercase;}
+.tn-dcorpo{padding:6px;}
+.nav-foco{margin:4px 6px 10px;padding:10px;border-radius:10px;background:rgba(255,255,255,.1);color:#fff;font-size:12.5px;}
+.nav-foco-mod{font-weight:800;letter-spacing:.04em;}
+.nav-foco-un{color:#FFE7A3;margin-top:3px;}
+.nav-foco-acoes{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.nav-foco-acoes button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:7px;padding:5px 9px;font:inherit;font-size:12px;cursor:pointer;}
+`; document.head.appendChild(st);
+})();
+
+/* ---------- ganchos: entrar no módulo pela barra, pela busca, pelo menu lateral ou por qualquer link ---------- */
+const _gotoSemUnidade=goto;
+goto=function(view, semLog){
+  const it=MENU_ITENS[view]; const m=it?moduloDoGrupo(it.grupo):null; const mod=m?m.id:'';
+  /* telas do Módulo Menu (recados, senha, ajuda...) abrem sem fechar o módulo aberto */
+  if(mod==='menu' || !mod){ UN_MOD.iniciou=true; return _gotoSemUnidade(view, semLog); }
+  if(APP_PRONTO && mod!==UN_MOD.atual && podeVer(view)){
+    if(modPedeUnidade(mod)){ unidEntrar(mod, ()=>{ UN_MOD.iniciou=true; TN.assin=''; _gotoSemUnidade(view, semLog); }); return; }
+    unidMarcarModulo(mod); TN.assin='';
+  }
+  UN_MOD.iniciou=true;
+  return _gotoSemUnidade(view, semLog);
+};
+if(typeof tnClicar==='function'){
+  const _tnClicarSemUnidade=tnClicar;
+  tnClicar=function(k){
+    /* no menu principal: clicar num módulo ENTRA nele (pede a unidade e abre a primeira tela) */
+    if(!moduloFoco() && k!=='menu' && k!=='gestao' && MODULOS_MENU.some(m=>m.id===k)){ moduloEntrar(k); return; }
+    return _tnClicarSemUnidade(k);
+  };
+  const _tnPassarAntes=tnPassar;
+  tnPassar=function(k){ if(!moduloFoco() && k!=='menu' && k!=='gestao') return; return _tnPassarAntes(k); };
+  const _tnAbrirModuloAntes=tnAbrirModulo;
+  tnAbrirModulo=function(modId){ const f=moduloFoco(); if(modId!=='menu' && modId!==f){ moduloEntrar(modId); return; } if(modId==='menu' && f){ moduloSair(); return; } return _tnAbrirModuloAntes(modId); };
+  const _tnInicioAntes=tnInicio;
+  tnInicio=function(){ const f=moduloFoco(); if(f){ tnFechar(); const v=moduloPrimeiraTela(f); if(v){ goto(v); return; } } return _tnInicioAntes(); };
+  /* busca com um módulo aberto: só as telas dele */
+  const _tnBuscarAntes=tnBuscar;
+  tnBuscar=function(v){
+    _tnBuscarAntes(v); const f=moduloFoco(); if(!f || !TN.res) return;
+    const mf=MODULOS_MENU.find(x=>x.id===f);
+    TN.res=TN.res.filter(r=>r.tipo==='tela' && r.it && mf && mf.grupos.includes(r.it.grupo)).map((r,i)=>Object.assign({}, r, {cab:i===0?'Telas do '+tnRotulo(mf):''}));
+    TN.resSel=0; tnResRender();
+  };
+}
+/* o seletor de unidade no alto da tela também vale como "unidade deste módulo" */
+const _trocarUnidadeAntes=trocarUnidade;
+trocarUnidade=function(id){ const r=_trocarUnidadeAntes(id); const mod=UN_MOD.atual; if(mod && modPedeUnidade(mod)){ UN_MOD.ult[mod]=id; try{ localStorage.setItem(UN_MOD_KEY, JSON.stringify(UN_MOD.ult)); }catch(e){} } TN.assin=''; return r; };
+/* menu de módulos do Painel Geral: entra no módulo */
+if(typeof menuAbrirModulo==='function'){ menuAbrirModulo=function(id){ moduloEntrar(id); }; }
+/* tela inicial: sem módulo aberto, o menu com todos os módulos (Painel Geral); com módulo aberto, a 1ª tela dele */
+const _primeiraTelaAntesModulo=primeiraTelaPermitida;
+primeiraTelaPermitida=function(){ const f=moduloFoco(); if(f){ const v=moduloPrimeiraTela(f); if(v) return v; } if(podeVer('menuPainel')) return 'menuPainel'; return _primeiraTelaAntesModulo(); };
 
 </script>
 </body>
