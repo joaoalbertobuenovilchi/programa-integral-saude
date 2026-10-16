@@ -626,6 +626,10 @@ const DOC_CONTADORES = 'contadores';
      1.19.2026  16/10/2026   ADMINISTRADOR MASTER (módulos contratados por instalação e gerador da instalação para outra
                              Secretaria/Município), módulo "Controle de Exames" passa a se chamar CONTROLE CONVÊNIOS e
                              novo MÓDULO UTILIDADES / LINKS ÚTEIS (links oficiais, downloads e a pasta ATUALIZAÇÕES DO APLICATIVO)
+     1.20.2026  16/10/2026   Menu principal com TODOS os módulos na barra (atendimento à esquerda, gestão à direita junto
+                             da busca); a barra cresce para duas linhas quando não cabem numa só
+     1.21.2026  16/10/2026   Unidades de medida da farmácia (UNIDADE.XML do Fiorilli) que entraram como Unidade de
+                             Saúde: importação corrigida e botão "Corrigir agora" na tela Unidades de Saúde
    ============================================================ */
 const APP_NOME = 'Programa Integral de Saúde';
 /* Licença gravada no próprio arquivo (1.19): o gerador de instalação do Administrador Master troca a linha
@@ -633,7 +637,7 @@ const APP_NOME = 'Programa Integral de Saúde';
    (ou todos os módulos, se ninguém definiu). NÃO mexa nos comentários em volta: o gerador procura por eles. */
 /*LICENCA_FIXA*/var LICENCA_FIXA=null;/*FIM_LICENCA_FIXA*/
 const APP_CRIACAO = { mes: 10, ano: 2026 };
-const APP_ALTERACAO = 19;
+const APP_ALTERACAO = 21;
 const APP_DATA = '2026-10-16';
 function appVersao(){
   const p = APP_DATA.split('-').map(Number);
@@ -6621,14 +6625,16 @@ function impAnalisar(){
     let st='novo', ex=null;
     if(erro) st='invalido';
     else { const ks=a.chaves(r).filter(Boolean); ex=ks.map(k=>existentes.get(k)).find(Boolean)||null; if(ex) st='existe'; else if(ks.some(k=>vistos.has(k))) st='repetido'; ks.forEach(k=>vistos.add(k)); }
-    return {n:n+1, r, st, ex, erro, avisos:st==='novo'?avisos:[], completa:st==='existe' && !!impCompletar(ex, r)};
+    return {n:n+1, r, st, ex, erro, avisos:st==='novo'?avisos:[], completa:st==='existe' && !!impCompletar(ex, r, IMPX.alvo)};
   });
   const aux={}; Object.keys(ctx.aux).forEach(t=>{ const novos=[...ctx.aux[t].values()].filter(x=>!obter(t,x.id)); if(novos.length) aux[t]=novos; });
   IMPX.an={itens, cont:contar(itens, x=>x.st), aux}; IMPX.anChave=chave;
   return IMPX.an;
 }
-function impCompletar(ex, r){
+function impCompletar(ex, r, alvo){
   const c=Object.assign({}, ex); let mud=false;
+  /* 1.21: alguns cadastros completam mais do que os campos vazios (ex.: unidade de medida criada só com o código ganha o nome) */
+  const a=alvo&&IMP_ALVOS[alvo]; if(a && a.completarMais && a.completarMais(c, r)) mud=true;
   Object.keys(r).forEach(k=>{ if(['id','matriculaArq','situacao','origem','ativo','agenda','tempoConsulta','usaTriagem','rename','parametros','tipoResultado','importacao'].includes(k)) return; if(impVazio(c[k]) && !impVazio(r[k])){ c[k]=r[k]; mud=true; } });
   return mud?c:null;
 }
@@ -6638,7 +6644,7 @@ async function impExecutar(){
   const a=IMP_ALVOS[IMPX.alvo]; if(!a) return;
   if(!isAdmin() && !pode(a.view)){ showToast('Seu perfil não pode incluir registros em '+a.titulo+'.','warning'); return; }
   const an=impAnalisar(); const novos=an.itens.filter(x=>x.st==='novo').map(x=>x.r);
-  const comp=IMPX.completar ? an.itens.filter(x=>x.st==='existe').map(x=>impCompletar(x.ex, x.r)).filter(Boolean) : [];
+  const comp=IMPX.completar ? an.itens.filter(x=>x.st==='existe').map(x=>impCompletar(x.ex, x.r, IMPX.alvo)).filter(Boolean) : [];
   const auxN=Object.values(an.aux).reduce((s,l)=>s+l.length,0);
   if(!novos.length && !comp.length && !auxN){ showToast('Nada novo para importar.','warning'); return; }
   if(!confirm(`Importar ${fmtNum(novos.length)} ${a.titulo.toLowerCase()} novo(s)${comp.length?' e completar '+fmtNum(comp.length)+' cadastro(s) que já existiam (só campos em branco)':''}${auxN?' — e criar '+fmtNum(auxN)+' cadastro(s) de apoio ('+Object.keys(an.aux).map(t=>an.aux[t].length+' '+impNomeTab(t)).join(', ')+')':''}?`)) return;
@@ -6653,7 +6659,7 @@ async function impExecutar(){
 async function impGravar(alvo, an, opc){
   const a=IMP_ALVOS[alvo]; opc=opc||{}; const bar=opc.bar||(()=>{});
   const novos=an.itens.filter(x=>x.st==='novo').map(x=>x.r);
-  const comp=opc.completar ? an.itens.filter(x=>x.st==='existe').map(x=>impCompletar(x.ex, x.r)).filter(Boolean) : [];
+  const comp=opc.completar ? an.itens.filter(x=>x.st==='existe').map(x=>impCompletar(x.ex, x.r, alvo)).filter(Boolean) : [];
   const auxN=Object.values(an.aux).reduce((s,l)=>s+l.length,0);
   const impId=uid(); const quando=agoraLocal(); const arquivos=opc.arquivos||'';
   try{
@@ -7127,6 +7133,8 @@ const VERSOES=[
   ['1.17.2026','15/10/2026','CID-10 COMPLETO: a importação da tabela do DATASUS (CID-10-SUBCATEGORIAS.CSV, cerca de 12.500 códigos) dava "o documento atingiu o limite de tamanho do Firestore". A tabela CID passa a ser guardada em 16 partes (procedimentos SIGTAP em 8 e produtos da farmácia em 8); antes de importar, os códigos já gravados vão para a parte certa; e toda gravação em lote confere o tamanho ANTES de gravar — se algum documento fosse passar do limite, nada é gravado (antes a importação parava no meio). RAÇA DOS PACIENTES: em Importar de Outros Sistemas › Importar todas as tabelas, com o CADSOCIAL (e, de preferência, a tabela RACA) escolhidos, aparece "Raça dos pacientes importados antes", que corrige parda/amarela trocadas pela importação antiga — só nos pacientes em que a raça gravada é exatamente a trocada; a anterior fica guardada no cadastro.'],
   ['1.18.2026','16/10/2026','TABELA SIGTAP PELO PACOTE .ZIP: a importação de Procedimentos (SIGTAP) pedia o tb_procedimento.txt, que fica dentro do pacote compactado do DATASUS. Agora basta escolher o próprio TabelaUnificada_AAAAMM_vXXXX.zip, sem descompactar — em Importar de Outros Sistemas, em Tabelas › Procedimentos e em Faturamento › Atualizações (traz valores, instrumento de registro e CBOs permitidos). O CID-10 também pode vir do mesmo .zip (tb_cid.txt) ou do tb_cid.txt extraído. A tela explica onde baixar o pacote (endereço FTP do DATASUS pelo Explorador de Arquivos do Windows) e avisa quando o arquivo escolhido é o tabela-unificada.jar (o programa do SIGTAP, não a tabela) ou um .rar.'],
   ['1.19.2026','16/10/2026','ADMINISTRADOR MASTER: quem instalou o sistema passa a ser o Administrador Master (perfil novo, com tudo o que o administrador faz). Só ele vê a tela Módulo Menu › Sistema e Ajuda › Administrador Master, onde escolhe os MÓDULOS CONTRATADOS desta instalação (os outros somem do menu, da busca, dos painéis e dos perfis de todos — os dados ficam guardados e voltam ao marcar de novo), informa contratante e vigência (aviso 30 dias antes de vencer) e GERA A INSTALAÇÃO PARA OUTRA SECRETARIA / MUNICÍPIO: um index.html ligado ao Firebase do cliente, só com os módulos que ele comprou gravados no próprio arquivo, com o roteiro de implantação e as regras do banco prontas. Só um master dá ou tira o perfil master, e sempre fica pelo menos um. CONTROLE CONVÊNIOS: o módulo "Controle de Exames" passa a se chamar Controle Convênios (as telas e os dados não mudam; a busca acha pelos dois nomes). MÓDULO UTILIDADES / LINKS ÚTEIS (novo): links oficiais do Ministério da Saúde, DATASUS, IBGE, ANS, Anvisa e outros, com busca instantânea, categorias, favoritos e acesso rápido (como a barra Links Úteis do SIS da Fiorilli); Links da Secretaria (cadastro próprio); e Downloads e Pasta de Atualizações — o sistema cria no computador a pasta ATUALIZAÇÕES DO APLICATIVO (uma subpasta por assunto), guarda nela o que é baixado, instala o ATUALIZADOR (Windows) que baixa de uma vez as tabelas e os programas do DATASUS, inclusive do FTP, e permite usar os arquivos da pasta direto no sistema (SIGTAP, CID-10, municípios). O CID-10 também aceita o .zip do DATASUS com o CSV dentro.'],
+  ['1.20.2026','16/10/2026','MENU PRINCIPAL COM TODOS OS MÓDULOS: a barra do alto mostra o botão de cada módulo — nada mais fica escondido em "Gestão" ou "Mais". Os módulos de atendimento ficam à esquerda e os de gestão (Faturamento, Financeiro, Controle Convênios, Cotações e Audiências) à direita, junto da busca, com o rótulo GESTÃO (que abre os cinco juntos num só painel). Quando não cabem numa linha, a barra cresce para duas; em telas menores os botões ficam mais compactos. O menu lateral (opção no menu do usuário) e o celular continuam como antes.'],
+  ['1.21.2026','16/10/2026','UNIDADES DE SAÚDE × UNIDADES DE MEDIDA: a tabela UNIDADE do Fiorilli (UNIDADE.XML: ampola, frasco, comprimido, caixa...) é a das unidades de MEDIDA da farmácia, mas a importação de todas as tabelas a mandava para as Unidades de Saúde. Agora ela vai para Farmácia › Tabelas › Unidades de medida (e os produtos do CADEST se ligam à unidade certa pelo nome); a importação de Unidades de Saúde recusa linha que é unidade de medida sem CNES. Na tela Unidades de Saúde, um aviso mostra os cadastros que entraram errado e o botão "Corrigir agora" passa cada um para as unidades de medida da farmácia e o tira da lista das unidades de saúde (o registro fica guardado e marcado — nada é apagado).'],
 ];
 VIEWS.sobre=()=>`<div class="grid cols-2" style="align-items:start;">
   <div class="card"><h2>❔ ${esc(APP_NOME)}</h2><div class="kv"><div><span class="k">Versão</span><span class="v"><b>${appVersao()}</b></span></div><div><span class="k">Atualizada em</span><span class="v">${fmtData(APP_DATA)}</span></div><div><span class="k">Entidade</span><span class="v">${esc(entidadeNome())}</span></div><div><span class="k">Módulos instalados</span><span class="v">${MODULOS_MENU.filter(m=>modContratado(m.id)).map(m=>m.ic+' '+esc(m.nome.replace('MÓDULO ',''))).join(' · ')}</span></div>${licencaAtual()?`<div><span class="k">Licenciado para</span><span class="v">${esc(licencaAtual().contratante||'—')}${licencaAtual().fim?' · vigência até '+fmtData(licencaAtual().fim):''}</span></div>`:''}</div>
@@ -14354,9 +14362,12 @@ APPS_INT.aud={
 /* ============================================================
    MENU PRINCIPAL HORIZONTAL (1.14)
    Os módulos ficam numa barra no alto da tela; ao clicar num módulo abre um
-   painel com todas as telas dele, os grupos lado a lado em colunas. "Gestão"
-   reúne Faturamento, Financeiro e os aplicativos integrados; o que não cabe
-   na largura da tela vai para "Mais". Busca de telas com Ctrl+K.
+   painel com todas as telas dele, os grupos lado a lado em colunas. Busca de
+   telas com Ctrl+K. 1.20: TODOS os módulos aparecem na barra — os de
+   atendimento à esquerda e os de gestão (Faturamento, Financeiro e os
+   aplicativos integrados) à direita, junto da busca; se não cabem numa
+   linha, a barra cresce para duas (ou mais, em tela pequena). O rótulo
+   "Gestão" abre o painel com os módulos de gestão juntos.
    Em telas estreitas (celular) o botão ☰ abre o menu lateral de sempre.
    Quem preferir o menu lateral antigo liga no menu do usuário (vale para o
    computador, fica no navegador). As permissões e as telas não mudam.
@@ -14389,7 +14400,7 @@ function tnModAtivo(){ const it=MENU_ITENS[currentView]; if(!it) return ''; cons
 (function(){
   const st=document.createElement('style'); st.textContent=`
 .topnav{display:none;}
-body:not(.menu-lateral) .topnav{display:flex;align-items:center;gap:10px;flex:0 0 100%;width:100%;position:sticky;top:0;z-index:60;height:54px;padding:0 14px;background:linear-gradient(90deg,#053B2E 0%,var(--teal-dark) 55%,#0A6B53 100%);color:#fff;box-shadow:0 2px 12px rgba(0,0,0,.14);}
+body:not(.menu-lateral) .topnav{display:flex;align-items:center;gap:10px;flex:0 0 100%;width:100%;position:sticky;top:0;z-index:60;min-height:54px;padding:6px 14px;box-sizing:border-box;background:linear-gradient(90deg,#053B2E 0%,var(--teal-dark) 55%,#0A6B53 100%);color:#fff;box-shadow:0 2px 12px rgba(0,0,0,.14);}
 body:not(.menu-lateral) #app{flex-wrap:wrap;align-content:flex-start;}
 body:not(.menu-lateral) #menuBtn{display:none!important;}
 body:not(.menu-lateral) .demo-banner{top:auto;bottom:24px;border-radius:8px 8px 0 0;}
@@ -14398,7 +14409,15 @@ body:not(.menu-lateral) .demo-banner{top:auto;bottom:24px;border-radius:8px 8px 
 .tn-marca .brand-mark{width:32px;height:32px;flex:0 0 32px;font-size:17px;}
 .tn-marca-txt{font-size:10.5px;font-weight:800;line-height:1.2;letter-spacing:.3px;white-space:nowrap;}
 .tn-marca-txt small{display:block;font-weight:500;opacity:.75;font-size:10px;max-width:150px;overflow:hidden;text-overflow:ellipsis;}
-.tn-mods{display:flex;align-items:center;gap:2px;flex:1;min-width:0;overflow:hidden;white-space:nowrap;}
+.tn-mods{display:flex;flex-wrap:wrap;align-items:center;align-content:center;gap:4px 2px;flex:1;min-width:0;white-space:nowrap;}
+.tn-g1,.tn-g2{display:flex;flex-wrap:wrap;align-items:center;gap:4px 2px;min-width:0;}
+.tn-g2{margin-left:auto;}
+.tn-grot{flex:0 0 auto;background:transparent;border:0;border-left:1px solid rgba(255,255,255,.28);color:rgba(255,255,255,.7);font:inherit;font-size:10px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;padding:6px 8px 6px 11px;margin-left:6px;cursor:pointer;border-radius:0 8px 8px 0;}
+.tn-grot:hover,.tn-grot.aberto{color:#fff;background:rgba(255,255,255,.1);}
+.topnav.tn-plano .tn-g1,.topnav.tn-plano .tn-g2{display:contents;}
+.topnav.tn-compacto .tn-mod{padding:6px 7px;font-size:12px;gap:5px;}
+.topnav.tn-compacto .tn-marca-txt{display:none;}
+.topnav.tn-compacto .tn-busca{flex-basis:168px;}
 .tn-mod{display:flex;align-items:center;gap:6px;flex:0 0 auto;background:transparent;border:0;color:rgba(255,255,255,.9);font:inherit;font-size:12.5px;font-weight:600;padding:7px 9px;border-radius:8px;cursor:pointer;transition:background .15s ease,color .15s ease;}
 .tn-mod:hover{background:rgba(255,255,255,.13);color:#fff;}
 .tn-mod.ativo{background:rgba(255,255,255,.95);color:var(--teal-dark);}
@@ -14433,7 +14452,7 @@ body:not(.menu-lateral) .demo-banner{top:auto;bottom:24px;border-radius:8px 8px 
 .tn-umenu .tn-uinfo b{display:block;color:var(--ink);font-size:13.5px;}
 .tn-umenu button{display:block;width:100%;text-align:left;background:transparent;border:0;padding:8px;border-radius:8px;font:inherit;font-size:13px;cursor:pointer;color:var(--ink);}
 .tn-umenu button:hover{background:var(--teal-soft);}
-.tn-painel{display:none;position:absolute;top:100%;left:10px;right:10px;background:#fff;color:var(--ink);border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px;box-shadow:0 18px 50px rgba(6,40,30,.24);max-height:calc(100vh - 84px);overflow:auto;}
+.tn-painel{display:none;position:absolute;top:100%;left:10px;right:10px;background:#fff;color:var(--ink);border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px;box-shadow:0 18px 50px rgba(6,40,30,.24);max-height:calc(100vh - var(--tn-h, 54px) - 30px);overflow:auto;}
 .tn-painel.aberto{display:block;}
 .tn-pcab{display:flex;align-items:center;gap:10px;padding:11px 18px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:1;}
 .tn-pcab b{font-size:12.5px;letter-spacing:.06em;color:var(--teal-dark);}
@@ -14484,28 +14503,29 @@ function tnBotaoHTML(e){
   const ativo=e.mods.some(x=>x.m.id===tnModAtivo()); const b=e.mods.reduce((s,x)=>s+(TN.badges[x.m.id]||0),0);
   return `<button type="button" class="tn-mod ${ativo?'ativo':''} ${TN.aberto===e.k?'aberto':''}" data-k="${e.k}" aria-haspopup="true" aria-expanded="${TN.aberto===e.k}" onclick="tnClicar('${e.k}')" onmouseenter="tnPassar('${e.k}')" onmouseleave="clearTimeout(TN.timer)" title="${esc(e.mods.map(x=>tnRotulo(x.m)).join(', '))}"><span class="tn-icw ${b?'com':''}">${e.ic}${b?`<span class="tn-bdg">${b>99?'99+':b}</span>`:''}</span><span>${esc(e.rot)}</span></button>`;
 }
-/* Cabe tudo? Cada módulo com o seu botão. Não cabe? 1º junta Faturamento e Financeiro em "Gestão"
-   (os aplicativos integrados continuam com botão próprio); 2º junta também os aplicativos; 3º o que
-   ainda sobrar vai para "Mais". */
+/* 1.20: todos os módulos com botão próprio. Os de atendimento à esquerda; os de gestão à direita, junto da
+   busca. Não cabem numa linha? A barra cresce: 1º os de gestão descem para a 2ª linha (à direita); se os de
+   atendimento também não cabem numa linha, os botões correm em sequência; se passar de 2 linhas, os botões
+   ficam mais compactos (sem o nome do sistema ao lado da marca). */
+function tnLinhas(nav){ return new Set([...nav.querySelectorAll('.tn-mod')].map(b=>b.offsetTop)).size; }
 function tnMontarBarra(){
-  const nav=document.getElementById('tnMods'); if(!nav) return; const mods=TN.mods;
+  const nav=document.getElementById('tnMods'); if(!nav) return; const mods=TN.mods; const tn=document.getElementById('topnav');
   const item=x=>({k:x.m.id, rot:tnRotulo(x.m), ic:x.m.ic, mods:[x]});
-  const grupo=l=>l.length>1?[{k:'gestao', rot:'Gestão', ic:'💼', mods:l}]:l.map(item);
-  const gest=mods.filter(x=>TN_GESTAO.includes(x.m.id)), sing=mods.filter(x=>!TN_GESTAO.includes(x.m.id));
-  const apps=gest.filter(x=>/^app_/.test(x.m.id)), fatFin=gest.filter(x=>!/^app_/.test(x.m.id));
-  const etapas=[mods.map(item), sing.map(item).concat(grupo(fatFin), apps.map(item)), sing.map(item).concat(grupo(gest))];
-  let ent=etapas[0], mais=[];
-  const desenhar=()=>{ TN.ent=ent.concat(mais.length?[{k:'mais', rot:'Mais', ic:'⋯', mods:mais.flatMap(e=>e.mods)}]:[]); nav.innerHTML=TN.ent.map(tnBotaoHTML).join(''); };
-  desenhar();
-  if(nav.offsetParent!==null){
-    for(let i=1;i<etapas.length && nav.scrollWidth>nav.clientWidth+1;i++){ ent=etapas[i]; desenhar(); }
-    let n=0;
-    while(nav.scrollWidth>nav.clientWidth+1 && n++<40){
-      let i=-1; for(let j=ent.length-1;j>=0;j--){ if(!TN_FIXOS.includes(ent[j].k) && ent[j].k!=='gestao'){ i=j; break; } }
-      if(i<0) i=ent.findIndex(e=>e.k==='gestao'); if(i<0) break;
-      mais=ent.splice(i,1).concat(mais); desenhar();
+  const ass=mods.filter(x=>!TN_GESTAO.includes(x.m.id)).map(item), gest=mods.filter(x=>TN_GESTAO.includes(x.m.id));
+  const gestEnt=gest.map(item);
+  /* o rótulo "Gestão" abre o painel com os módulos de gestão juntos (fica por último: o botão de cada módulo vem antes) */
+  TN.ent=ass.concat(gestEnt, gest.length>1?[{k:'gestao', rot:'Gestão', ic:'💼', mods:gest, oculto:true}]:[]);
+  nav.innerHTML=`<div class="tn-g1">${ass.map(tnBotaoHTML).join('')}</div>${gestEnt.length?`<div class="tn-g2">${gest.length>1?`<button type="button" class="tn-grot ${TN.aberto==='gestao'?'aberto':''}" data-k="gestao" onclick="tnClicar('gestao')" title="Abrir os módulos de gestão juntos">Gestão</button>`:''}${gestEnt.map(tnBotaoHTML).join('')}</div>`:''}`;
+  if(tn){
+    tn.classList.remove('tn-plano','tn-compacto');
+    if(nav.offsetParent!==null){
+      const estados=[[],['tn-compacto'],['tn-plano'],['tn-compacto','tn-plano']];
+      for(const e of estados){ tn.classList.remove('tn-plano','tn-compacto'); e.forEach(c=>tn.classList.add(c)); if(tnLinhas(nav)<=2) break; }
     }
+    const bi=document.getElementById('tnBusca'); if(bi) bi.placeholder=tn.classList.contains('tn-compacto')?'Buscar… (Ctrl+K)':'Buscar tela… (Ctrl+K)';
+    document.documentElement.style.setProperty('--tn-h', (tn.offsetHeight||54)+'px');
   }
+  if(typeof appAjustarAltura==='function') setTimeout(appAjustarAltura, 0);
   if(TN.aberto && !TN.ent.some(e=>e.k===TN.aberto)) tnFechar();
 }
 function tnRender(){
@@ -14526,13 +14546,13 @@ function tnClicar(k){ clearTimeout(TN.timer); if(TN.aberto===k) tnFechar(); else
 function tnPassar(k){ if(!TN.aberto || TN.aberto===k) return; clearTimeout(TN.timer); TN.timer=setTimeout(()=>tnAbrir(k), 140); }
 function tnAbrir(k){
   tnUsuarioFechar(); tnBuscaFechar(); TN.aberto=k; TN.sel=null;
-  document.querySelectorAll('#tnMods .tn-mod').forEach(b=>{ b.classList.toggle('aberto', b.dataset.k===k); b.setAttribute('aria-expanded', String(b.dataset.k===k)); });
+  document.querySelectorAll('#tnMods .tn-mod, #tnMods .tn-grot').forEach(b=>{ b.classList.toggle('aberto', b.dataset.k===k); b.setAttribute('aria-expanded', String(b.dataset.k===k)); });
   tnPainelRender();
 }
 function tnFechar(){
   clearTimeout(TN.timer); if(!TN.aberto) return; TN.aberto=null;
   const p=document.getElementById('tnPainel'); if(p){ p.classList.remove('aberto'); p.innerHTML=''; }
-  document.querySelectorAll('#tnMods .tn-mod').forEach(b=>{ b.classList.remove('aberto'); b.setAttribute('aria-expanded','false'); });
+  document.querySelectorAll('#tnMods .tn-mod, #tnMods .tn-grot').forEach(b=>{ b.classList.remove('aberto'); b.setAttribute('aria-expanded','false'); });
 }
 function tnSel(id){ if(TN.sel===id) return; TN.sel=id; tnPainelRender(); }
 function tnPainelRender(){
@@ -14665,18 +14685,18 @@ if(typeof ResizeObserver!=='undefined'){ let tnLarg=0; const ro=new ResizeObserv
    ============================================================ */
 /* tabela do SIS → cadastro do PIS. Marcada = vem selecionada (nome e campos conferidos). */
 const FIO_TABELAS={
-  CADUNI:'unidades', UNIDADE:'unidades', CADMEDICO:'profissionais', CADFUNC:'funcionarios', CADSOCIAL:'pacientes',
+  CADUNI:'unidades', UNIDADE:'farmaUnidadesMedida', CADMEDICO:'profissionais',   /* 1.21: UNIDADE do SIS = unidades de MEDIDA (UNID1, UNIDADE) */ CADFUNC:'funcionarios', CADSOCIAL:'pacientes',
   ESPECIALIDADES:'especialidades', CONVENIOS:'convenios', RUAS:'logradouros', CADMUN:'municipios',
   CADEST:'farmaProdutos', DESFOR:'farmaFornecedores', EXAMES:'labExames',
   LEITO:'hospLeitos', RX_EXAME:'rxExames', VS_ESTABELECIMENTO:'visaEstabelecimentos', VS_TBCNAE:'visaCnae', VS_RESPONSAVEIS:'visaTecnicos',
   ZOONOSE:'animais', BS_BOLSA:'bsBolsas', VEIC:'veiculos', SAMU_DESTINO:'locais',
 };
-const FIO_MARCADAS=new Set(['CADUNI','CADMEDICO','CADFUNC','CADSOCIAL','ESPECIALIDADES','CONVENIOS','RUAS','CADEST','LEITO','RX_EXAME','VS_ESTABELECIMENTO','VS_TBCNAE','VEIC']);
+const FIO_MARCADAS=new Set(['CADUNI','CADMEDICO','CADFUNC','CADSOCIAL','ESPECIALIDADES','CONVENIOS','RUAS','UNIDADE','CADEST','LEITO','RX_EXAME','VS_ESTABELECIMENTO','VS_TBCNAE','VEIC']);
 /* tabelas "filhas" que completam um cadastro (ligadas pelo código dele): lotação e CBO dos profissionais */
 const FIO_FILHAS={profissionais:['UNIDADE_PROF','UNIDADE_PROF_ESPEC']};
 /* tabelas de apoio conhecidas (traduzem códigos em nomes) — só para a lista do que vale exportar */
 const FIO_APOIO=['RACA','TIPOLOGR','TIPOUNI','CADGRUPO','CADSUBGRUPO','CADLAB','PSICOTROPICO','SETOR','QUARTO_APTO','RX_EXAME_GRUPO','ZOO_ESPECIE','ZOO_RACA','BS_ABORH','BS_TIPO_COMPONENTE','EX_GRUPO','EX_MATERIAIS','NACIONALIDADE','ESTADOS','UNIDADE_PROF','UNIDADE_PROF_ESPEC'];
-const FIO_ORDEM=['unidades','mantenedores','especialidades','profissionais','funcionarios','bairros','logradouros','municipios','convenios','locais','pacientes','medicamentos','labExames','farmaFornecedores','farmaProdutos','hospLeitos','rxExames','visaCnae','visaTecnicos','visaEstabelecimentos','animais','bsBolsas','veiculos','motoristas'];
+const FIO_ORDEM=['unidades','mantenedores','especialidades','profissionais','funcionarios','bairros','logradouros','municipios','convenios','locais','pacientes','medicamentos','labExames','farmaFornecedores','farmaUnidadesMedida','farmaProdutos','hospLeitos','rxExames','visaCnae','visaTecnicos','visaEstabelecimentos','animais','bsBolsas','veiculos','motoristas'];
 function fioOrdem(k){ const i=FIO_ORDEM.indexOf(k); return i<0 ? 100+((IMP_ALVOS[k]||{}).ordem||0) : i; }
 
 /* ---------- nomes de campo do Fiorilli que faltavam nos cadastros ---------- */
@@ -14685,6 +14705,7 @@ function fioOrdem(k){ const i=FIO_ORDEM.indexOf(k); return i<0 ? 100+((IMP_ALVOS
   add('profissionais','registro',['NUMEROCR']); add('profissionais','ufConselho',['UFCR']); add('profissionais','conselho',['TIPCODIGO']); add('profissionais','ativo',['FLG_ATIVO']);
   add('profissionais','cbo',['CD_CBO_PRINCIPAL','CBO_ESPECIALIDADE']);
   add('unidades','ativo',['FLG_ATIVO']); add('funcionarios','ativo',['FLG_ATIVO']); add('farmaProdutos','ativo',['FLG_ATIVO']);
+  { const c=IMP_ALVOS.farmaProdutos && IMP_ALVOS.farmaProdutos.campos.find(x=>x.k==='unidade'); if(c && !c.sin.includes('UNIDADE_MEDIDA_SIS')) c.sin.unshift('UNIDADE_MEDIDA_SIS'); }
   const p=IMP_ALVOS.pacientes;
   if(p && !p.campos.some(c=>c.k==='flutuante')) p.campos.push({k:'flutuante', r:'Não reside no município', t:'sim', sin:['FLG_FLUTUANTE','FLUTUANTE']});
   /* CADSOCIAL do Fiorilli: óbito, inativo, raça (códigos do Fiorilli), condições, município pelo código IBGE */
@@ -14820,6 +14841,12 @@ async function fioPreparar(f){
     const d=await fioDicionario(c, f); if(d) extras.push({i, nome:novo, d});
   }
   if(extras.length){ t.cab=t.cab.concat(extras.map(e=>e.nome)); t.linhas.forEach(l=>extras.forEach(e=>{ const v=String(l[e.i]||''); l.push(v.split(';').map(x=>e.d.m.get(x.trim())||'').filter(Boolean).join(';')); })); f.traduz=extras.map(e=>e.nome+' ('+e.d.tabela+')'); }
+  /* 1.21: os produtos (CADEST) guardam a sigla da unidade (UNID1); a tabela UNIDADE do SIS dá o nome dela
+     (COMP → COMPRIMIDO), e o produto se liga à unidade de medida certa da farmácia */
+  if(f.alvo==='farmaProdutos'){
+    const iu=t.cab.indexOf('UNID1');
+    if(iu>=0 && !t.cab.includes('UNIDADE_MEDIDA_SIS')){ const d=await fioDicionario('UNID1', f); if(d){ t.cab.push('UNIDADE_MEDIDA_SIS'); t.linhas.forEach(l=>{ const v=String(l[iu]||'').trim(); l.push(d.m.get(v)||v); }); f.traduz=(f.traduz||[]).concat(['UNIDADE_MEDIDA_SIS ('+d.tabela+')']); } }
+  }
   f._p=t; return t;
 }
 /* a análise é a mesma da importação de uma tabela (IMPX), feita com o estado desta tabela */
@@ -14967,6 +14994,93 @@ function fioLoteHTML(){
     return abas+volta+v0();
   };
 })();
+
+/* ============================================================
+   1.21 — UNIDADES DE MEDIDA QUE ENTRARAM COMO UNIDADE DE SAÚDE
+   A tabela UNIDADE do Fiorilli (UNID1 = sigla, UNIDADE = nome) é a das unidades de MEDIDA da farmácia
+   (ampola, frasco, comprimido, caixa...). Até a 1.20 a importação de todas as tabelas a mandava para as
+   Unidades de Saúde. Agora ela vai para Farmácia › Tabelas › Unidades de medida; a importação de Unidades
+   de Saúde recusa linha que é unidade de medida sem CNES; e a tela Unidades de Saúde oferece a correção
+   dos registros que entraram errado: cada um passa para as unidades de medida da farmácia e sai da lista
+   das unidades de saúde (fica guardado, inativo e marcado com medidaFarmacia — nada é apagado).
+   ============================================================ */
+const UMED_NOMES=new Set(['ADESIVO','AMPOLA','BALDE','BISNAGA','BLISTER','BOLSA','CAIXA','CANETA','CAPSULA','CARTELA','CENTO','COMPRIMIDO','CONJUNTO','DOSE','DRAGEA','DUZIA','ENVELOPE','FARDO','FRASCO','FRASCO AMPOLA','FRASCO-AMPOLA','FRASCOAMPOLA','GALAO','GOTA','GRAMA','JOGO','KIT','LATA','LITRO','METRO','MILHEIRO','MILIGRAMA','MILILITRO','PACOTE','PAR','PECA','POTE','QUILO','QUILOGRAMA','REFIL','RESMA','ROLO','SACHE','SACO','SERINGA','SUPOSITORIO','TIRA','TIRA REAGENTE','TUBO','UNIDADE','VIDRO','AMP','CP','CX','FR','ML','MG','KG','PCT','PC','UN','UND','UNID','G','L','M','CM']);
+function pareceUnidadeMedida(nome){
+  const n=norm(nome).replace(/[^A-Z0-9 -]/g,'').replace(/\s+/g,' ').trim(); if(!n) return false; const s=n.replace(/S$/,'');
+  if(UMED_NOMES.has(n) || UMED_NOMES.has(s)) return true;
+  return lista('farmaUnidadesMedida').some(u=>{ const a=norm(u.nome||''), b=norm(u.sigla||''); return a===n || a===s || b===n; });
+}
+(function(){
+  if(typeof IMP_ALVOS==='undefined') return;
+  IMP_ALVOS.farmaUnidadesMedida={titulo:'Unidades de medida (Farmácia)', ic:'⚖️', tab:'farmaUnidadesMedida', view:'farmaTabelas', ordem:10.9, xml:/unid1|unidade.?medida|^ROW$/i,
+    dica:'Do SIS: tabela UNIDADE (UNID1 = sigla, UNIDADE = nome — ampola, frasco, comprimido...). Chave: sigla ou nome.',
+    campos:[{k:'sigla', r:'Sigla', t:'maiusc', obr:true, sin:['UNID1','SIGLA','SG_UNIDADE','SIGLA_UNIDADE','UNID','UN']},
+      {k:'nome', r:'Nome', t:'maiusc', sin:['UNIDADE','DESCRICAO','NOME','DS_UNIDADE','DE_UNIDADE','UNIDADE_MEDIDA']}],
+    chaves:r=>[r.sigla&&'sig:'+norm(r.sigla).replace(/\s+/g,''), r.nome&&'nome:'+norm(r.nome)],
+    montar(r){ r.sigla=String(r.sigla||'').replace(/\s+/g,'').toUpperCase().slice(0,8); if(!r.nome) r.nome=r.sigla; r.ativo=true; },
+    /* unidade criada antes só com o código (nome = sigla, ex.: FRA — FRA, quando os produtos vieram sem esta tabela) ganha o nome */
+    completarMais(c, r){ if(r.nome && c.sigla && norm(c.nome||'')===norm(c.sigla) && norm(r.nome)!==norm(c.nome||'')){ c.nome=r.nome; return true; } return false; },
+    validar:r=>!r.sigla?'sem sigla':'', prev:[['sigla','Sigla'],['nome','Nome']]};
+  const u=IMP_ALVOS.unidades; if(u){ const v0=u.validar; u.validar=r=>(v0?v0(r):'') || (!soDigitos(r.cnes) && pareceUnidadeMedida(r.nome) ? 'é unidade de MEDIDA da farmácia (ampola, frasco...), não unidade de saúde' : ''); }
+})();
+function umedImportsErrados(){ return new Set(lista('importacoes').filter(h=>h.alvo==='unidades' && /(^|[^a-z_])UNIDADE\.XML/i.test(String(h.arquivos||''))).map(h=>h.id)); }
+function umedCandidatos(){
+  const imps=umedImportsErrados();
+  return ordenarTexto(lista('unidades').filter(u=>!u.medidaFarmacia && !soDigitos(u.cnes) && ((u.importacao && imps.has(u.importacao)) || pareceUnidadeMedida(u.nome))), u=>u.nome);
+}
+/* onde cada cadastro aparece (só no que está carregado agora): para a pessoa saber antes de corrigir */
+function umedUsos(ids){
+  const set=new Set(ids), cont=new Map(ids.map(i=>[i,0])); const conta=v=>{ if(typeof v==='string' && set.has(v)) cont.set(v, cont.get(v)+1); };
+  Object.keys(TABELAS).forEach(t=>{ if(t==='unidades' || t==='importacoes' || !DB[t]) return; lista(t).forEach(r=>{ for(const k in r){ if(k==='id' || k==='importacao') continue; const v=r[k]; if(Array.isArray(v)) v.forEach(conta); else conta(v); } }); });
+  (USERS_STATE.usuarios||[]).forEach(u=>(u.unidades||[]).forEach(conta));
+  return cont;
+}
+function umedDestino(u, novas){
+  const n=norm(u.nome).replace(/\s+/g,' ').trim(), s=n.replace(/S$/,'');
+  const todas=lista('farmaUnidadesMedida').concat(novas||[]);
+  const ex=todas.find(x=>{ const a=norm(x.nome||''); return a===n || a===s || norm(x.sigla||'')===n; });
+  if(ex) return {existe:true, id:ex.id, sigla:ex.sigla, nome:ex.nome};
+  const usadas=new Set(todas.map(x=>norm(x.sigla||''))); const base=s.replace(/[^A-Z0-9]/g,'').slice(0,6)||'UN'; let sig=base, k=2;
+  while(usadas.has(sig)) sig=base.slice(0,5)+(k++);
+  return {existe:false, sigla:sig, nome:String(u.nome||'').toUpperCase().trim()};
+}
+function umedAvisoHTML(){
+  if(!(isAdmin() || pode('unidades'))) return '';
+  const c=umedCandidatos(); if(!c.length) return '';
+  return `<div class="alerta-aviso" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;"><span style="flex:1;min-width:260px;">⚠️ <b>${c.length}</b> cadastro(s) desta lista são <b>unidades de medida da farmácia</b>, não unidades de saúde: ${c.slice(0,8).map(u=>esc(u.nome)).join(', ')}${c.length>8?'…':''}. Vieram do arquivo UNIDADE.XML do Fiorilli, que a importação mandava para cá por engano.</span><button class="btn" onclick="umedCorrigirAbrir()">✔ Corrigir agora</button></div>`;
+}
+function umedCorrigirAbrir(){
+  if(!(isAdmin() || pode('unidades'))){ showToast('Seu perfil não altera as unidades.','warning'); return; }
+  const cand=umedCandidatos(); if(!cand.length){ showToast('Nada para corrigir.','success'); return; }
+  const usos=umedUsos(cand.map(u=>u.id)); const imps=umedImportsErrados(); const novas=[];
+  const linhas=cand.map(u=>{ const d=umedDestino(u, novas); if(!d.existe) novas.push({id:'x'+u.id, sigla:d.sigla, nome:d.nome});
+    return `<tr><td><input type="checkbox" class="umedChk" value="${u.id}" checked></td><td><b>${esc(u.nome)}</b></td><td class="small">${u.importacao && imps.has(u.importacao)?'veio do UNIDADE.XML do Fiorilli':'nome de unidade de medida, sem CNES'}</td><td>${esc(d.sigla)} — ${esc(d.nome)} ${d.existe?'<span class="badge cinza">já existe</span>':'<span class="badge ok">nova</span>'}</td><td class="nowrap">${usos.get(u.id)?usos.get(u.id)+' registro(s)':'—'}</td></tr>`; }).join('');
+  abrirModal({titulo:'⚖️ Unidades de medida nas Unidades de Saúde', tamanho:'m-grande', corpo:`<div class="helpbox">Os marcados <b>saem da lista de Unidades de Saúde</b> (e do seletor de unidade no alto da tela) e passam para <b>Farmácia › Tabelas › Unidades de medida</b> — onde já existe uma com o mesmo nome, ela é aproveitada. <b>Nada é apagado</b>: o cadastro antigo fica guardado, inativo e marcado como unidade de medida. Desmarque o que for de fato uma unidade de saúde.</div>
+    <div class="table-wrap" style="max-height:430px;"><table><thead><tr><th style="width:30px;"><input type="checkbox" checked onchange="document.querySelectorAll('.umedChk').forEach(c=>c.checked=this.checked)"></th><th>Cadastro</th><th>Por quê</th><th>Vai para (unidade de medida)</th><th>Usado em</th></tr></thead><tbody>${linhas}</tbody></table></div>
+    ${[...usos.values()].some(Boolean)?'<div class="small muted mt">"Usado em": registros que apontam para esse cadastro (ex.: a unidade escolhida num atendimento). Eles continuam mostrando o nome — só deixa de ser oferecido como unidade de saúde.</div>':''}`,
+    botoes:[{r:'✔ Corrigir os marcados', fn:'umedCorrigir()'}]});
+}
+async function umedCorrigir(){
+  const ids=[...document.querySelectorAll('.umedChk:checked')].map(c=>c.value); if(!ids.length){ showToast('Marque pelo menos um.','warning'); return; }
+  const cand=umedCandidatos().filter(u=>ids.includes(u.id)); const novas=[], alt=[]; const quando=agoraLocal(), por=usuarioCurto();
+  cand.forEach(u=>{ let d=umedDestino(u, novas);
+    if(!d.existe){ const r={id:uid(), sigla:d.sigla, nome:d.nome, ativo:true, origem:'passada das Unidades de Saúde (1.21)'}; novas.push(r); d={id:r.id}; }
+    alt.push(Object.assign({}, u, {ativo:false, medidaFarmacia:true, unidadeMedidaId:d.id, ativoAntes:u.ativo!==false, corrigidoEm:quando, corrigidoPor:por})); });
+  carregandoMsg(true,'Corrigindo…');
+  try{
+    if(novas.length) await salvarLote('farmaUnidadesMedida', novas);
+    await salvarLote('unidades', alt);
+    registrarAcao('Passou '+alt.length+' unidade(s) de medida das Unidades de Saúde para a Farmácia ('+alt.map(u=>u.nome).join(', ').slice(0,120)+')');
+    fecharModalTopo();
+    if(alt.some(u=>u.id===UNIDADE_ATUAL)) escolherUnidadeInicial(); else preencherSelUnidade();
+    showToast(alt.length+' cadastro(s) corrigido(s): saíram das Unidades de Saúde'+(novas.length?' e '+novas.length+' unidade(s) de medida nova(s) na Farmácia':'')+'.','success');
+  }catch(e){ console.error(e); showToast('Falha ao gravar: '+msgErro(e),'error'); }
+  finally{ carregandoMsg(false); render(true); }
+}
+VIEWS.unidades=()=>{
+  const mov=lista('unidades').filter(u=>u.medidaFarmacia).length;
+  return umedAvisoHTML()+viewCad('unidades',{filtro:r=>!r.medidaFarmacia})+(mov?`<div class="small muted mt">${mov} unidade(s) de medida que estavam nesta lista foram passadas para Farmácia › Tabelas › Unidades de medida.</div>`:'');
+};
 
 /* ============================================================
    MÓDULO UTILIDADES / LINKS ÚTEIS (1.19)
